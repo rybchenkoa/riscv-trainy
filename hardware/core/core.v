@@ -94,7 +94,7 @@ assign data_write = is_op_store;
 assign data_out = is_op_store ? reg_s2 : 0;
 
 //общее для чтения и записи
-wire [11:0] address_imm = data_read ? op_immediate_i : data_write ? op_immediate_s : 0;
+wire [31:0] address_imm = data_read ? op_immediate_i : data_write ? op_immediate_s : 0;
 assign data_address = (is_op_load || is_op_store) ? reg_s1 + address_imm : 0;
 assign data_width = (is_op_load || is_op_store) ? op_funct3[1:0] : 'b11; //0-byte, 1-half, 2-word
 
