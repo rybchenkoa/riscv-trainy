@@ -85,9 +85,9 @@ wire signed [31:0] reg_s2_signed = reg_s2;
 //чтение памяти (lb, lh, lw, lbu, lhu), I-тип
 assign data_read = is_op_load;
 wire load_signed = ~op_funct3[2];
-wire [31:0] load_data = op_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
-                        op_funct3[1:0] == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
-                        data_in; //2-word
+wire [31:0] rd_load = op_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
+                      op_funct3[1:0] == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
+                      data_in; //2-word
 
 //запись памяти (sb, sh, sw), S-тип
 assign data_write = is_op_store;
@@ -100,22 +100,22 @@ assign data_width = (is_op_load || is_op_store) ? op_funct3[1:0] : 'b11; //0-byt
 
 //обработка арифметических операций (add, sub, xor, or, and, sll, srl, sra, slt, sltu)
 wire [31:0] alu_operand2 = is_op_alu ? reg_s2 : is_op_alu_imm ? op_immediate_i : 0;
-wire [31:0] alu_result = op_funct3 == 0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
-                         op_funct3 == 4 ? reg_s1 ^ alu_operand2 :
-                         op_funct3 == 6 ? reg_s1 | alu_operand2 :
-                         op_funct3 == 7 ? reg_s1 & alu_operand2 :
-                         op_funct3 == 1 ? reg_s1 << alu_operand2[4:0] :
-                         op_funct3 == 5 ? (op_funct7[5] ? reg_s1_signed >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
-                         op_funct3 == 2 ? reg_s1_signed < $signed(alu_operand2) :
-                         op_funct3 == 3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
-                         0; //невозможный результат
+wire [31:0] rd_alu = op_funct3 == 0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
+                     op_funct3 == 4 ? reg_s1 ^ alu_operand2 :
+                     op_funct3 == 6 ? reg_s1 | alu_operand2 :
+                     op_funct3 == 7 ? reg_s1 & alu_operand2 :
+                     op_funct3 == 1 ? reg_s1 << alu_operand2[4:0] :
+                     op_funct3 == 5 ? (op_funct7[5] ? reg_s1_signed >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
+                     op_funct3 == 2 ? reg_s1_signed < $signed(alu_operand2) :
+                     op_funct3 == 3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
+                     0; //невозможный результат
 
 //обработка upper immediate
-wire [31:0] load_upper_result = op_immediate_u; //lui
-wire [31:0] add_upper_result = pc + op_immediate_u; //auipc
+wire [31:0] rd_load_upper = op_immediate_u; //lui
+wire [31:0] rd_add_upper = pc + op_immediate_u; //auipc
 
 //обработка ветвлений
-wire [31:0] branch_pc = pc + op_immediate_b;
+wire [31:0] pc_branch = pc + op_immediate_b;
 wire branch_fired = op_funct3 == 0 && reg_s1 == reg_s2 || //beq
                     op_funct3 == 1 && reg_s1 != reg_s2 || //bne
                     op_funct3 == 4 && reg_s1_signed <  reg_s2_signed || //blt
@@ -124,9 +124,9 @@ wire branch_fired = op_funct3 == 0 && reg_s1 == reg_s2 || //beq
                     op_funct3 == 7 && reg_s1 >= reg_s2; //bgeu
 
 //короткие и длинные переходы (jal, jalr)
-wire [31:0] jal_result = pc + 4;
-wire [31:0] jal_pc = pc + op_immediate_j;
-wire [31:0] jalr_pc = reg_s1 + op_immediate_i; //здесь действительно I-тип
+wire [31:0] rd_jal = pc + 4;
+wire [31:0] pc_jal = pc + op_immediate_j;
+wire [31:0] pc_jalr = reg_s1 + op_immediate_i; //здесь действительно I-тип
 
 //теперь комбинируем результат работы логики разных команд
 integer i;
@@ -137,16 +137,16 @@ begin
 		pc = 0;
 	end else begin
 		regs[op_rd] <= op_rd == 0 ? 0 : //x0 = 0
-					   is_op_load ? load_data :
-					   is_op_alu || is_op_alu_imm ? alu_result :
-					   is_op_load_upper ? load_upper_result :
-					   is_op_add_upper ? add_upper_result :
-					   is_op_jal || is_op_jalr ? jal_result :
+					   is_op_load ? rd_load :
+					   is_op_alu || is_op_alu_imm ? rd_alu :
+					   is_op_load_upper ? rd_load_upper :
+					   is_op_add_upper ? rd_add_upper :
+					   is_op_jal || is_op_jalr ? rd_jal :
 					   regs[op_rd];
 
-		pc <= (is_op_branch && branch_fired) ? branch_pc :
-			  is_op_jal ? jal_pc :
-			  is_op_jalr ? jalr_pc :
+		pc <= (is_op_branch && branch_fired) ? pc_branch :
+			  is_op_jal ? pc_jal :
+			  is_op_jalr ? pc_jalr :
 			  pc + 4;
 	end
 end
