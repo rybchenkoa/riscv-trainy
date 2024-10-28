@@ -56,6 +56,7 @@ barebones_clock()
    does not occur. If there are issues with the return value overflowing,
    increase this value.
         */
+#define CLOCKS_PER_SEC             100
 #define GETMYTIME(_t)              (*_t = barebones_clock())
 #define MYTIMEDIFF(fin, ini)       ((fin) - (ini))
 #define TIMER_RES_DIVIDER          1
@@ -130,8 +131,8 @@ ee_u32 default_num_contexts = 1;
 void
 portable_init(core_portable *p, int *argc, char *argv[])
 {
-#error \
-    "Call board initialization routines in portable init (if needed), in particular initialize UART!\n"
+//#error \
+//    "Call board initialization routines in portable init (if needed), in particular initialize UART!\n"
 
     (void)argc; // prevent unused warning
     (void)argv; // prevent unused warning
@@ -146,6 +147,9 @@ portable_init(core_portable *p, int *argc, char *argv[])
     {
         ee_printf("ERROR! Please define ee_u32 to a 32b unsigned type!\n");
     }
+	
+	ee_printf("CoreMark start %d\n", barebones_clock());
+	
     p->portable_id = 1;
 }
 /* Function : portable_fini
@@ -154,5 +158,6 @@ portable_init(core_portable *p, int *argc, char *argv[])
 void
 portable_fini(core_portable *p)
 {
+    ee_printf("CoreMark end %d\n", barebones_clock());
     p->portable_id = 0;
 }
