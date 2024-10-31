@@ -1,5 +1,5 @@
 set gcc_bin=E:\проекты\RISC-V\xpack-riscv-none-elf-gcc-12.2.0-3\bin\riscv-none-elf
-set arch=rv32e
+set arch=rv32em
 set abi=ilp32e
 
 set COMPILER_FLAGS=\"compiler_flags\"

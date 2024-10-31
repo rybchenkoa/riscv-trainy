@@ -1,4 +1,4 @@
-unsigned __umulsi3(unsigned a, unsigned b)
+/*unsigned __umulsi3(unsigned a, unsigned b)
 {
 	unsigned result = 0;
 
@@ -99,3 +99,4 @@ int __modsi3(int a, int b)
 {
 	return __divmod(a, b, 0);
 }
+*/

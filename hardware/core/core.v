@@ -17,6 +17,8 @@
     `define REG_COUNT 32
 `endif
 
+`include "alu.v"
+
 module RiscVCore
 (
 	input clock,
@@ -37,6 +39,7 @@ module RiscVCore
 //базовый набор регистров
 reg [31:0] regs [0:`REG_COUNT-1]; //x0-x31
 reg [31:0] pc;
+wire is_wait; //на текущем такте инструкция ещё не готова
 
 //достаём из pc адрес инструкции и посылаем в шину
 assign instruction_address = pc;
@@ -58,6 +61,7 @@ wire[31:0] op_immediate_b = {{20{instruction[31]}}, instruction[7],
                              instruction[30:25], instruction[11:8], 1'b0};
 wire[31:0] op_immediate_j = {{12{instruction[31]}}, instruction[19:12], 
                              instruction[20], instruction[30:21], 1'b0};
+
 //выбираем сработавшую инструкцию
 wire is_op_load = op_code == `opcode_load;
 wire is_op_store = op_code == `opcode_store;
@@ -98,17 +102,24 @@ wire [31:0] address_imm = data_read ? op_immediate_i : data_write ? op_immediate
 assign data_address = (is_op_load || is_op_store) ? reg_s1 + address_imm : 0;
 assign data_width = (is_op_load || is_op_store) ? op_funct3[1:0] : 'b11; //0-byte, 1-half, 2-word
 
-//обработка арифметических операций (add, sub, xor, or, and, sll, srl, sra, slt, sltu)
-wire [31:0] alu_operand2 = is_op_alu ? reg_s2 : is_op_alu_imm ? op_immediate_i : 0;
-wire [31:0] rd_alu = op_funct3 == 0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
-                     op_funct3 == 4 ? reg_s1 ^ alu_operand2 :
-                     op_funct3 == 6 ? reg_s1 | alu_operand2 :
-                     op_funct3 == 7 ? reg_s1 & alu_operand2 :
-                     op_funct3 == 1 ? reg_s1 << alu_operand2[4:0] :
-                     op_funct3 == 5 ? (op_funct7[5] ? reg_s1_signed >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
-                     op_funct3 == 2 ? reg_s1_signed < $signed(alu_operand2) :
-                     op_funct3 == 3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
-                     0; //невозможный результат
+//обработка арифметических операций
+//(add, sub, xor, or, and, sll, srl, sra, slt, sltu)
+//(mul, mulh, mulsu, mulu, div, divu, rem, remu)
+wire [31:0] rd_alu;
+wire is_alu_wait;
+RiscVAlu alu(
+				.clock(clock),
+				.reset(reset),
+				.is_op_alu(is_op_alu),
+				.is_op_alu_imm(is_op_alu_imm),
+				.op_funct3_in(op_funct3),
+				.op_funct7(op_funct7),
+				.reg_s1(reg_s1),
+				.reg_s2(reg_s2),
+				.imm(op_immediate_i),
+				.rd_alu(rd_alu),
+				.is_alu_wait(is_alu_wait)
+			);
 
 //обработка upper immediate
 wire [31:0] rd_load_upper = op_immediate_u; //lui
@@ -129,25 +140,31 @@ wire [31:0] pc_jal = pc + op_immediate_j;
 wire [31:0] pc_jalr = reg_s1 + op_immediate_i; //здесь действительно I-тип
 
 //теперь комбинируем результат работы логики разных команд
+wire [31:0] rd_result = op_rd == 0 ? 0 : //x0 = 0
+						is_op_load ? rd_load :
+						is_op_alu || is_op_alu_imm ? rd_alu :
+						is_op_load_upper ? rd_load_upper :
+						is_op_add_upper ? rd_add_upper :
+						is_op_jal || is_op_jalr ? rd_jal :
+						regs[op_rd];
+
+wire [31:0] pc_result = (is_op_branch && branch_fired) ? pc_branch :
+						is_op_jal ? pc_jal :
+						is_op_jalr ? pc_jalr :
+						pc + 4;
+
+assign is_wait = is_alu_wait;
+
 integer i;
 always@(posedge clock or posedge reset)
 begin
 	if (reset == 1) begin
 		for (i = 0; i < `REG_COUNT; i=i+1) regs[i] = 0;
 		pc = 0;
-	end else begin
-		regs[op_rd] <= op_rd == 0 ? 0 : //x0 = 0
-					   is_op_load ? rd_load :
-					   is_op_alu || is_op_alu_imm ? rd_alu :
-					   is_op_load_upper ? rd_load_upper :
-					   is_op_add_upper ? rd_add_upper :
-					   is_op_jal || is_op_jalr ? rd_jal :
-					   regs[op_rd];
-
-		pc <= (is_op_branch && branch_fired) ? pc_branch :
-			  is_op_jal ? pc_jal :
-			  is_op_jalr ? pc_jalr :
-			  pc + 4;
+	end
+	else if (!is_wait) begin
+		regs[op_rd] <= rd_result;
+		pc <= pc_result;
 	end
 end
 endmodule
