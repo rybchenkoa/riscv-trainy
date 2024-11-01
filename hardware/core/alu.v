@@ -66,7 +66,10 @@ wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 0; // = s
 wire rem_sign_start = need_restore_sign ? reg_s1[31] : 0; // = sign(x)
 wire [31:0] start_x = (need_restore_sign && $signed(reg_s1) < 0) ? -reg_s1 : reg_s1;
 wire [31:0] start_y = (need_restore_sign && $signed(reg_s2) < 0) ? -reg_s2 : reg_s2;
-wire [31:0] start_msb = (1 << 31);
+wire [31:0] start_msb = start_x[31:24] != 0 ? (1 << 31) : //легковесная подгонка начального счётчика цикла
+						start_x[23:16] != 0 ? (1 << 23) :
+						start_x[15:8] != 0 ? (1 << 15) :
+						(1 << 7);
 wire [31:0] start_r1 = !is_op_multiply ? start_msb :
 						is_op_mul_extend_sign ? (reg_s1[31] ? -1 : 0) :
 						0;
