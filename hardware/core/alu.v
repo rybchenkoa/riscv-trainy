@@ -15,19 +15,19 @@ module RiscVAlu
 );
 
 //немного стабилизации входов
-wire [2:0] op_funct3_a = (is_op_alu || is_op_alu_imm) ? op_funct3_in : 0;
+wire [2:0] op_funct3_a = (is_op_alu || is_op_alu_imm) ? op_funct3_in : 3'b0;
 
 //обработка (add, sub, xor, or, and, sll, srl, sra, slt, sltu)
 //в случае лёгких инструкций вычисляем результат сразу
 wire [31:0] alu_operand2 = is_op_alu ? reg_s2 : is_op_alu_imm ? imm : 0;
-wire [31:0] rd_alu1 = op_funct3_a == 0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
-					  op_funct3_a == 4 ? reg_s1 ^ alu_operand2 :
-					  op_funct3_a == 6 ? reg_s1 | alu_operand2 :
-					  op_funct3_a == 7 ? reg_s1 & alu_operand2 :
-					  op_funct3_a == 1 ? reg_s1 << alu_operand2[4:0] :
-					  op_funct3_a == 5 ? (op_funct7[5] ? $signed(reg_s1) >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
-					  op_funct3_a == 2 ? $signed(reg_s1) < $signed(alu_operand2) :
-					  op_funct3_a == 3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
+wire [31:0] rd_alu1 = op_funct3_a == 3'd0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
+					  op_funct3_a == 3'd4 ? reg_s1 ^ alu_operand2 :
+					  op_funct3_a == 3'd6 ? reg_s1 | alu_operand2 :
+					  op_funct3_a == 3'd7 ? reg_s1 & alu_operand2 :
+					  op_funct3_a == 3'd1 ? reg_s1 << alu_operand2[4:0] :
+					  op_funct3_a == 3'd5 ? (op_funct7[5] ? $signed(reg_s1) >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
+					  op_funct3_a == 3'd2 ? $signed(reg_s1) < $signed(alu_operand2) :
+					  op_funct3_a == 3'd3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
 					  0; //невозможный результат
 
 // РАСШИРЕНИЕ M
@@ -45,13 +45,13 @@ reg rem_sign;
 
 //расшифровываем инструкцию
 wire is_op_muldiv = is_op_alu && op_funct7[0];
-wire [2:0] op_funct3 = is_op_muldiv ? op_funct3_in : 0; //отдельная стабилизация для модуля M
+wire [2:0] op_funct3 = is_op_muldiv ? op_funct3_in : 3'b0; //отдельная стабилизация для модуля M
 wire is_op_multiply = !op_funct3[2];
 wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
-wire is_op_mul_low = op_funct3[1:0] == 0; //mul
+//wire is_op_mul_low = op_funct3[1:0] == 0; //mul
 wire is_op_mul_extend_sign = op_funct3[1:0] == 2; //musu //умножаем как беззнаковые, но сам знак надо расширить до 64 бит
 wire is_op_div_signed = !op_funct3[0]; //div, rem
-wire is_op_remainder = op_funct3[2]; //rem, remu
+//wire is_op_remainder = op_funct3[2]; //rem, remu
 
 //если хоть где-то ноль, результат можно выдать сразу
 wire need_wait = is_op_muldiv && reg_s1 && reg_s2;
@@ -62,13 +62,13 @@ wire need_wait = is_op_muldiv && reg_s1 && reg_s2;
 //для умножения со знаком достаточно убрать знак у короткого сомножителя
 //но для деления надо убрать у обоих, поэтому делаем единообразно
 wire need_restore_sign = is_op_multiply ? is_op_mul_signed : is_op_div_signed;
-wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 0; // = sign(x) * sign(y)
-wire rem_sign_start = need_restore_sign ? reg_s1[31] : 0; // = sign(x)
+wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 1'b0; // = sign(x) * sign(y)
+wire rem_sign_start = need_restore_sign ? reg_s1[31] : 1'b0; // = sign(x)
 wire [31:0] start_x = (need_restore_sign && $signed(reg_s1) < 0) ? -reg_s1 : reg_s1;
 wire [31:0] start_y = (need_restore_sign && $signed(reg_s2) < 0) ? -reg_s2 : reg_s2;
-wire [31:0] start_msb = start_x[31:24] != 0 ? (1 << 31) : //легковесная подгонка начального счётчика цикла
-						start_x[23:16] != 0 ? (1 << 23) :
-						start_x[15:8] != 0 ? (1 << 15) :
+wire [31:0] start_msb = start_x[31:24] != 8'b0 ? (1 << 31) : //легковесная подгонка начального счётчика цикла
+						start_x[23:16] != 8'b0 ? (1 << 23) :
+						start_x[15:8] != 8'b0 ? (1 << 15) :
 						(1 << 7);
 wire [31:0] start_r1 = !is_op_multiply ? start_msb :
 						is_op_mul_extend_sign ? (reg_s1[31] ? -1 : 0) :
@@ -99,7 +99,7 @@ wire div_end = next_msb == 0;
 
 //комбинируем значения для заполнения регистров
 //в теории регистры можно переставить, сдвиг и условие выхода кажутся похожими
-wire [31:0] next_x = is_op_multiply ? next_mul_x : x;
+wire [31:0] next_x = is_op_multiply ? next_mul_x[31:0] : x;
 wire [31:0] next_y = is_op_multiply ? next_mul_y : y;
 wire [31:0] next_r1 = is_op_multiply ? next_mul_x[63:32] : next_msb;
 wire [31:0] next_r2 = is_op_multiply ? next_mul_val[31:0] : next_rem_val;
@@ -112,13 +112,13 @@ wire [31:0] div_result = muldiv_sign ? -next_div_val : next_div_val;
 wire [31:0] rem_result = rem_sign ? -next_rem_val : next_rem_val;
 wire [31:0] rd_mul = !in_progress ? 0 : //на нулевом такте всё равно может быть только ноль
 					!divmul_end ? 0 : //пока процесс идёт, не качаем затворы
-					op_funct3 == 0 ? mul_result[31:0] : //mul
-					op_funct3 == 1 ? mul_result[63:32] : //mulh
-					op_funct3 == 2 ? mul_result[63:32] : //mulsu
-					op_funct3 == 3 ? mul_result[63:32] : //mulu
-					op_funct3 == 4 ? div_result : //div
-					op_funct3 == 5 ? div_result : //divu
-					op_funct3 == 6 ? rem_result : //rem
+					op_funct3 == 3'd0 ? mul_result[31:0] : //mul
+					op_funct3 == 3'd1 ? mul_result[63:32] : //mulh
+					op_funct3 == 3'd2 ? mul_result[63:32] : //mulsu
+					op_funct3 == 3'd3 ? mul_result[63:32] : //mulu
+					op_funct3 == 3'd4 ? div_result : //div
+					op_funct3 == 3'd5 ? div_result : //divu
+					op_funct3 == 3'd6 ? rem_result : //rem
 					/*op_funct3 == 7 ?*/ rem_result;  //remu
 
 //когда нельзя переходить к следующей инструкции
