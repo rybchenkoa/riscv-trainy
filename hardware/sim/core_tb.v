@@ -1,3 +1,4 @@
+`include "common.vh"
 `timescale 1ns / 1ns
 
 module core_tb;

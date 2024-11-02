@@ -1,4 +1,5 @@
 // ядро risc-v процессора
+`include "common.vh"
 
 // базовый набор инструкций rv32i
 `define opcode_load        7'b00000_11 //l**   rd,  rs1,imm     rd = m[rs1 + imm]; load bytes
@@ -10,14 +11,6 @@
 `define opcode_branch      7'b11000_11 //b**   rs1, rs2, imm   if () pc += imm
 `define opcode_jal         7'b11011_11 //jal   rd,imm   jump and link, rd = PC+4; PC += imm
 `define opcode_jalr        7'b11001_11 //jalr  rd,rs1,imm   jump and link reg, rd = PC+4; PC = rs1 + imm
-
-`ifdef __RV32E__
-    `define REG_COUNT 16 //для embedded число регистров меньше
-`else
-    `define REG_COUNT 32
-`endif
-
-`include "alu.v"
 
 module RiscVCore
 (
@@ -35,14 +28,6 @@ module RiscVCore
 	output        data_read,
 	output        data_write
 );
-
-//базовый набор регистров
-reg [31:0] regs [0:`REG_COUNT-1]; //x0-x31
-reg [31:0] pc;
-wire is_wait; //на текущем такте инструкция ещё не готова
-
-//достаём из pc адрес инструкции и посылаем в шину
-assign instruction_address = pc;
 
 //получаем из шины инструкцию
 wire [31:0] instruction = instruction_data;
@@ -78,10 +63,10 @@ wire error_opcode = !(is_op_load || is_op_store ||
                     is_op_load_upper || is_op_add_upper ||
                     is_op_branch || is_op_jal || is_op_jalr);
 
-//получаем регистры из адресов
-//wire [31:0] reg_d = regs[op_rd];
-wire [31:0] reg_s1 = regs[op_rs1];
-wire [31:0] reg_s2 = regs[op_rs2];
+//регистры-аргументы
+wire [31:0] reg_s1;
+wire [31:0] reg_s2;
+wire [31:0] pc = instruction_address;
 wire signed [31:0] reg_s1_signed = reg_s1;
 wire signed [31:0] reg_s2_signed = reg_s2;
 
@@ -140,31 +125,45 @@ wire [31:0] pc_jal = pc + op_immediate_j;
 wire [31:0] pc_jalr = reg_s1 + op_immediate_i; //здесь действительно I-тип
 
 //теперь комбинируем результат работы логики разных команд
-wire [31:0] rd_result = op_rd == 0 ? 0 : //x0 = 0
-						is_op_load ? rd_load :
+wire [31:0] rd_result = is_op_load ? rd_load :
 						is_op_alu || is_op_alu_imm ? rd_alu :
 						is_op_load_upper ? rd_load_upper :
 						is_op_add_upper ? rd_add_upper :
-						is_op_jal || is_op_jalr ? rd_jal :
-						regs[op_rd];
+						is_op_jal || is_op_jalr ? rd_jal
+						: 0;
 
-wire [31:0] pc_result = (is_op_branch && branch_fired) ? pc_branch :
+wire [31:0] pc_next = (is_op_branch && branch_fired) ? pc_branch :
 						is_op_jal ? pc_jal :
 						is_op_jalr ? pc_jalr :
 						pc + 4;
+						
+//на текущем такте инструкция ещё не готова
+wire is_wait = is_alu_wait; 
+//инструкция меняет регистр
+wire write_rd_instruction = is_op_load || is_op_alu || is_op_alu_imm 
+							|| is_op_load_upper || is_op_add_upper
+							|| is_op_jal || is_op_jalr;
 
-assign is_wait = is_alu_wait;
+//инструкция меняет значение регистра
+wire is_rd_changed = (!(is_wait || op_rd == 0)) && write_rd_instruction;
 
-integer i;
-always@(posedge clock or posedge reset)
-begin
-	if (reset == 1) begin
-		for (i = 0; i < `REG_COUNT; i=i+1) regs[i] = 0;
-		pc = 0;
-	end
-	else if (!is_wait) begin
-		regs[op_rd] <= rd_result;
-		pc <= pc_result;
-	end
-end
+//набор регистров
+RiscVRegs regs(
+	.clock(clock),
+	.reset(reset),
+	
+	.enable_write_pc(!is_wait),
+	.pc_val(instruction_address), //запрашиваем из памяти новую инструкцию
+	.pc_next(pc_next), //сохраняем в регистр адрес следующей инструкции
+
+	.rs1_index(op_rs1), //читаем регистры-аргументы
+	.rs2_index(op_rs2),
+	.rs1(reg_s1),
+	.rs2(reg_s2),
+	
+	.enable_write_rd(is_rd_changed), //пишем результат обработки операции
+	.rd_index(op_rd),
+	.rd(rd_result)
+);
+
 endmodule
