@@ -20,24 +20,26 @@ module RiscVRegs
 	input [31:0] rd
 );
 
-reg [31:0] regs [0:`REG_COUNT-1]; //x0-x31
+reg [31:0] regs [1:`REG_COUNT-1]; //x0-x31
 reg [31:0] pc;
 
 assign pc_val = pc;
-assign rs1 = regs[rs1_index];
-assign rs2 = regs[rs2_index];
+assign rs1 = rs1_index == 0 ? 0 : regs[rs1_index];
+assign rs2 = rs2_index == 0 ? 0 : regs[rs2_index];
 
 integer i;
 always@(posedge clock or posedge reset)
 begin
 	if (reset == 1) begin
-		for (i = 0; i < `REG_COUNT; i=i+1) regs[i] = 0;
+		for (i = 1; i < `REG_COUNT; i = i + 1) regs[i] = 0;
 		pc = 0;
 	end
 	else begin
 		if (enable_write_pc) begin
 			pc <= pc_next;
 		end
+
+		//regs[enable_write_rd ? 0 : rd_index] <= rd; //так более красиво, но занимает больше места
 		if (enable_write_rd) begin
 			regs[rd_index] <= rd;
 		end
