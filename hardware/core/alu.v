@@ -30,6 +30,7 @@ wire [31:0] rd_alu1 = op_funct3_a == 3'd0 ? (is_op_alu && op_funct7[5] ? reg_s1 
 					  op_funct3_a == 3'd3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
 					  0; //невозможный результат
 
+`ifdef __MULTIPLY__
 // РАСШИРЕНИЕ M
 //обработка (mul, mulh, mulsu, mulu, div, divu, rem, remu)
 //при умножении значения входных переменных могут меняться, поэтому запоминаем их локально
@@ -161,4 +162,9 @@ end
 assign rd_alu = is_op_muldiv ? rd_mul :
 					rd_alu1;
 
+`else
+assign is_alu_wait = 1'b0;
+assign rd_alu = rd_alu1;
+
+`endif //__MULTIPLY__
 endmodule
