@@ -10,7 +10,7 @@ reg reset = 1;
 reg [1:0] reset_counter = 2;
 reg [31:0] rom [0:`MEMORY_SIZE-1]; //память
 wire [31:0] i_addr;
-wire [31:0] i_data;
+reg [31:0] i_data;
 wire [31:0] d_addr;
 wire [31:0] d_data_in;
 wire [31:0] d_data_out;
@@ -61,33 +61,51 @@ RiscVCore core0
 );
 
 //шина инструкций всегда выровнена
-assign i_data = rom[i_addr[31:2]];
+always@(posedge clock) begin
+	i_data <= rom[i_addr[31:2]];
+end
 
 //теперь выравниваем данные
 //делаем невыровненный доступ, точнее выровненный по байтам
-wire [31:0] old_data = rom[d_addr[31:2]];
-wire [1:0] addr_tail = d_addr[1:0];
+reg [31:0] old_data;
+reg [31:0] old_data_out;
+reg [31:0] old_addr;
+reg [31:0] old_width;
+reg old_data_w;
+reg old_data_r;
+always@(posedge clock) begin
+	old_data <= (data_r || data_w) ? rom[d_addr[31:2]] : 32'hz;
+	old_data_out <= d_data_out;
+	old_addr <= d_addr;
+	old_width <= d_width;
+	old_data_w <= data_w;
+	old_data_r <= data_r;
+end
+
+wire [1:0] addr_tail = old_addr[1:0];
 
 //вешаем на общую шину регистры и память
-assign d_data_in = d_addr == 32'h40000008 ? timer :
-	d_addr < `MEMORY_SIZE * 4 ? (old_data >> (addr_tail * 8)) : 0; //TODO data_read не нужен?
+assign d_data_in = !old_data_r ? 32'hz : old_addr == 32'h40000008 ? timer :
+	old_addr < `MEMORY_SIZE * 4 ? (old_data >> (addr_tail * 8)) : 32'hz; //TODO data_read не нужен?
 
 //для чтения данных маска накладывается в ядре, здесь только для записи
-assign byte_mask = d_width == 0 ? 4'b0001 << addr_tail :
-                   d_width == 1 ? 4'b0011 << addr_tail :
+assign byte_mask = old_width == 0 ? 4'b0001 << addr_tail :
+                   old_width == 1 ? 4'b0011 << addr_tail :
                                   4'b1111;
 
 //раз для побайтового чтения надо делать побайтовый сдвиг
 //то для полуслов дешевле не ограничивать выравниванием на два байта
 //TODO нужна проверка выхода за границы слова?
-wire [31:0] aligned_out = d_data_out << addr_tail * 8;
-
-always@(posedge clock) begin
-	if (data_w) begin
-		rom[d_addr[31:2]] <= {byte_mask[3] ? aligned_out[31:24] : old_data[31:24],
+wire [31:0] aligned_out = old_data_out << addr_tail * 8;
+wire [31:0] new_data = !old_data_w ? 32'hz : {byte_mask[3] ? aligned_out[31:24] : old_data[31:24],
 							byte_mask[2] ? aligned_out[23:16] : old_data[23:16],
 							byte_mask[1] ? aligned_out[15:8] : old_data[15:8],
 							byte_mask[0] ? aligned_out[7:0] : old_data[7:0]};
+
+
+always@(posedge clock) begin
+	if (old_data_w) begin
+		rom[old_addr[31:2]] <= new_data;
 	end
 	if (data_w && d_addr == 32'h4000_0004) begin
 		//отладочный вывод

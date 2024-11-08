@@ -29,6 +29,30 @@ module RiscVCore
 	output        data_write
 );
 
+//этап 0 ======================================
+
+//на нулевом этапе выдаём адрес инструкции на шину и дальше вместе с инструкцией посылаем на первый этап
+wire [31:0] stage0_pc;
+assign instruction_address = stage0_pc;
+
+//этап 1 ======================================
+
+//инструкция уже в регистре, обрабатываем
+wire stage1_pause; //флаг остановки стадии конвейера
+reg stage1_reset; //флаг перезапуска конвейера, на старте адрес инструкции уже есть, а самой инструкции нет
+//сохраняем адрес инструкции с предыдущего этапа
+wire [31:0] pc; //pc <= stage0_pc
+
+always@(posedge clock or posedge reset)
+begin
+	if (reset == 1) begin
+		stage1_reset <= 1;
+	end
+	else begin
+		stage1_reset <= 0;
+	end
+end
+
 //получаем из шины инструкцию
 wire [31:0] instruction = instruction_data;
 
@@ -66,26 +90,21 @@ wire error_opcode = !(is_op_load || is_op_store ||
 //регистры-аргументы
 wire [31:0] reg_s1;
 wire [31:0] reg_s2;
-wire [31:0] pc = instruction_address;
 wire signed [31:0] reg_s1_signed = reg_s1;
 wire signed [31:0] reg_s2_signed = reg_s2;
 
 
 //чтение памяти (lb, lh, lw, lbu, lhu), I-тип
-assign data_read = is_op_load;
-wire load_signed = ~op_funct3[2];
-wire [31:0] rd_load = op_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
-                      op_funct3[1:0] == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
-                      data_in; //2-word
+assign data_read = is_op_load && !stage1_pause;
 
 //запись памяти (sb, sh, sw), S-тип
-assign data_write = is_op_store;
-assign data_out = is_op_store ? reg_s2 : 0;
+assign data_write = is_op_store && !stage1_pause;
+assign data_out = reg_s2;
 
 //общее для чтения и записи
-wire [31:0] address_imm = data_read ? op_immediate_i : data_write ? op_immediate_s : 0;
-assign data_address = (is_op_load || is_op_store) ? reg_s1 + address_imm : 0;
-assign data_width = (is_op_load || is_op_store) ? op_funct3[1:0] : 'b11; //0-byte, 1-half, 2-word
+wire [31:0] address_imm = is_op_load ? op_immediate_i : is_op_store ? op_immediate_s : 32'hz;
+assign data_address = (is_op_load || is_op_store) ? reg_s1 + address_imm : 32'hz;
+assign data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
 //(add, sub, xor, or, and, sll, srl, sra, slt, sltu)
@@ -95,6 +114,7 @@ wire is_alu_wait;
 RiscVAlu alu(
 				.clock(clock),
 				.reset(reset),
+				.enabled(!stage1_pause),
 				.is_op_alu(is_op_alu),
 				.is_op_alu_imm(is_op_alu_imm),
 				.op_funct3_in(op_funct3),
@@ -125,45 +145,101 @@ wire [31:0] pc_jal = pc + op_immediate_j;
 wire [31:0] pc_jalr = reg_s1 + op_immediate_i; //здесь действительно I-тип
 
 //теперь комбинируем результат работы логики разных команд
-wire [31:0] rd_result = is_op_load ? rd_load :
+wire [31:0] stage1_rd = /*is_op_load ? rd_load :*/
 						is_op_alu || is_op_alu_imm ? rd_alu :
 						is_op_load_upper ? rd_load_upper :
 						is_op_add_upper ? rd_add_upper :
 						is_op_jal || is_op_jalr ? rd_jal
 						: 0;
 
-wire [31:0] pc_next = (is_op_branch && branch_fired) ? pc_branch :
+//на текущем такте инструкция ещё не готова
+wire is_wait_instruction = is_alu_wait;
+//запрещено ли переходить к следующей инструкции
+wire lock_pc = stage1_pause || stage1_reset || is_wait_instruction;
+
+assign stage0_pc = lock_pc ? pc :
+						(is_op_branch && branch_fired) ? pc_branch :
 						is_op_jal ? pc_jal :
 						is_op_jalr ? pc_jalr :
 						pc + 4;
-						
-//на текущем такте инструкция ещё не готова
-wire is_wait = is_alu_wait; 
+
 //инструкция меняет регистр
 wire write_rd_instruction = is_op_load || is_op_alu || is_op_alu_imm 
 							|| is_op_load_upper || is_op_add_upper
 							|| is_op_jal || is_op_jalr;
 
 //инструкция меняет значение регистра
-wire is_rd_changed = (!(is_wait || op_rd == 0)) && write_rd_instruction;
+wire is_rd_changed = (!(is_wait_instruction || op_rd == 0)) && write_rd_instruction;
+
+//этап 2 ======================================
+//полученное из памяти значение записываем в регистр
+//место изменения регистра только одно, чтобы не возникало лишних задержек
+reg [2:0] stage2_funct3;
+reg stage2_is_op_load;
+reg stage2_is_op_store;
+reg [31:0] stage2_addr;
+reg [31:0] stage2_rd;
+reg[4:0] stage2_op_rd;
+reg stage2_is_rd_changed;
+reg stage2_last_lock;
+
+always@(posedge clock or posedge reset)
+begin
+	if (reset == 1) begin
+		stage2_funct3 <= 0;
+		stage2_is_op_load <= 0;
+		stage2_is_op_store <= 0;
+		stage2_addr <= 0;
+		stage2_rd <= 0;
+		stage2_op_rd <= 0;
+		stage2_is_rd_changed <= 0;
+		stage2_last_lock <= 0;
+	end
+	else begin
+		stage2_funct3 <= op_funct3;
+		stage2_is_op_load <= is_op_load;
+		stage2_is_op_store <= is_op_store;
+		stage2_addr <= data_address;
+		stage2_rd <= stage1_rd;
+		stage2_op_rd <= op_rd;
+		stage2_is_rd_changed <= is_rd_changed;
+		stage2_last_lock <= stage1_pause;
+	end
+end
+
+wire load_signed = ~stage2_funct3[2];
+wire [31:0] rd_load = stage2_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
+                      stage2_funct3[1:0] == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
+                      data_in; //2-word
+
+wire [31:0] stage2_rd_result = stage2_is_op_load ? rd_load : stage2_rd;
+
+//если пишем регистр, просим подождать предыдущие стадии
+wire stage2_rs1_equal = (stage2_op_rd == op_rs1) && (is_op_load || is_op_store || is_op_alu || is_op_alu_imm || is_op_branch || is_op_jalr);
+wire stage2_rs2_equal = (stage2_op_rd == op_rs2) && (is_op_store || is_op_alu || is_op_branch);
+wire stage2_rd_fired = stage2_is_rd_changed && (stage2_rs1_equal || stage2_rs2_equal);
+//если сохраняем в память и сразу читаем, тоже ждём
+wire stage2_memory_fired = (stage2_is_op_store && (is_op_load || is_op_store) && stage2_addr[31:2] == data_address[31:2]);
+//если на прошлом такте блокировали, пропускаем конвейер дальше, так как инструкция уже обработана
+assign stage1_pause = !stage2_last_lock && (stage2_rd_fired || stage2_memory_fired);
 
 //набор регистров
 RiscVRegs regs(
 	.clock(clock),
 	.reset(reset),
 	
-	.enable_write_pc(!is_wait),
-	.pc_val(instruction_address), //запрашиваем из памяти новую инструкцию
-	.pc_next(pc_next), //сохраняем в регистр адрес следующей инструкции
+	.enable_write_pc(!lock_pc),
+	.pc_val(pc), //текущий адрес инструкции
+	.pc_next(stage0_pc), //сохраняем в регистр адрес следующей инструкции
 
 	.rs1_index(op_rs1), //читаем регистры-аргументы
 	.rs2_index(op_rs2),
 	.rs1(reg_s1),
 	.rs2(reg_s2),
 	
-	.enable_write_rd(is_rd_changed), //пишем результат обработки операции
-	.rd_index(op_rd),
-	.rd(rd_result)
+	.enable_write_rd(stage2_is_rd_changed), //пишем результат обработки операции
+	.rd_index(stage2_op_rd),
+	.rd(stage2_rd_result)
 );
 
 endmodule

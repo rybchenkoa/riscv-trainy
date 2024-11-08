@@ -2,6 +2,7 @@ module RiscVAlu
 (
 	input clock,
 	input reset,
+	input enabled,
 	
 	input is_op_alu, //операция с двумя регистрами
 	input is_op_alu_imm, //операция с регистром и константой
@@ -45,7 +46,7 @@ reg muldiv_sign;
 reg rem_sign;
 
 //расшифровываем инструкцию
-wire is_op_muldiv = is_op_alu && op_funct7[0];
+wire is_op_muldiv = enabled && is_op_alu && op_funct7[0];
 wire [2:0] op_funct3 = is_op_muldiv ? op_funct3_in : 3'b0; //отдельная стабилизация для модуля M
 wire is_op_multiply = !op_funct3[2];
 wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
