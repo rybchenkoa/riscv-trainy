@@ -2,15 +2,15 @@
 `include "common.vh"
 
 // базовый набор инструкций rv32i
-`define opcode_load        7'b00000_11 //l**   rd,  rs1,imm     rd = m[rs1 + imm]; load bytes
-`define opcode_store       7'b01000_11 //s**   rs1, rs2,imm     m[rs1 + imm] = rs2; store bytes
-`define opcode_alu         7'b01100_11 //***   rd, rs1, rs2     rd = rs1 x rs2; arithmetical
-`define opcode_alu_imm     7'b00100_11 //***   rd, rs1, imm     rd = rs1 x imm; arithmetical with immediate
-`define opcode_load_upper  7'b01101_11 //lui   rd, imm          rd = imm << 12; load upper imm
-`define opcode_add_upper   7'b00101_11 //auipc rd, imm          rd = pc + (imm << 12); add upper imm to PC
-`define opcode_branch      7'b11000_11 //b**   rs1, rs2, imm   if () pc += imm
-`define opcode_jal         7'b11011_11 //jal   rd,imm   jump and link, rd = PC+4; PC += imm
-`define opcode_jalr        7'b11001_11 //jalr  rd,rs1,imm   jump and link reg, rd = PC+4; PC = rs1 + imm
+`define opcode_load        7'b00000_11 //I //l**   rd,  rs1,imm     rd = m[rs1 + imm]; load bytes
+`define opcode_store       7'b01000_11 //S //s**   rs1, rs2,imm     m[rs1 + imm] = rs2; store bytes
+`define opcode_alu         7'b01100_11 //R //***   rd, rs1, rs2     rd = rs1 x rs2; arithmetical
+`define opcode_alu_imm     7'b00100_11 //I //***   rd, rs1, imm     rd = rs1 x imm; arithmetical with immediate
+`define opcode_load_upper  7'b01101_11 //U //lui   rd, imm          rd = imm << 12; load upper imm
+`define opcode_add_upper   7'b00101_11 //U //auipc rd, imm          rd = pc + (imm << 12); add upper imm to PC
+`define opcode_branch      7'b11000_11 //B //b**   rs1, rs2, imm    if (rs1 x rs2) pc += imm
+`define opcode_jal         7'b11011_11 //J //jal   rd,imm   jump and link, rd = PC+4; PC += imm
+`define opcode_jalr        7'b11001_11 //I //jalr  rd,rs1,imm   jump and link reg, rd = PC+4; PC = rs1 + imm
 
 module RiscVCore
 (
@@ -87,6 +87,22 @@ wire error_opcode = !(is_op_load || is_op_store ||
                     is_op_load_upper || is_op_add_upper ||
                     is_op_branch || is_op_jal || is_op_jalr);
 
+//какой формат у инструкции
+wire type_r = is_op_alu;
+wire type_i = is_op_alu_imm || is_op_load || is_op_jalr;
+wire type_s = is_op_store;
+wire type_b = is_op_branch;
+wire type_u = is_op_load_upper || is_op_add_upper;
+wire type_j = is_op_jal;
+
+//мультиплексируем константы
+wire [31:0] immediate = type_i ? op_immediate_i :
+				type_s ? op_immediate_s :
+				type_b ? op_immediate_b :
+				type_j ? op_immediate_j :
+				type_u ? op_immediate_u :
+				0;
+
 //регистры-аргументы
 wire [31:0] reg_s1;
 wire [31:0] reg_s2;
@@ -102,8 +118,7 @@ assign data_write = is_op_store && !stage1_pause;
 assign data_out = reg_s2;
 
 //общее для чтения и записи
-wire [31:0] address_imm = is_op_load ? op_immediate_i : is_op_store ? op_immediate_s : 32'hz;
-assign data_address = (is_op_load || is_op_store) ? reg_s1 + address_imm : 32'hz;
+assign data_address = (is_op_load || is_op_store) ? reg_s1 + immediate : 32'hz;
 assign data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
@@ -121,17 +136,17 @@ RiscVAlu alu(
 				.op_funct7(op_funct7),
 				.reg_s1(reg_s1),
 				.reg_s2(reg_s2),
-				.imm(op_immediate_i),
+				.imm(immediate),
 				.rd_alu(rd_alu),
 				.is_alu_wait(is_alu_wait)
 			);
 
 //обработка upper immediate
-wire [31:0] rd_load_upper = op_immediate_u; //lui
-wire [31:0] rd_add_upper = pc + op_immediate_u; //auipc
+wire [31:0] rd_load_upper = immediate; //lui
+wire [31:0] rd_add_upper = pc + immediate; //auipc
 
 //обработка ветвлений
-wire [31:0] pc_branch = pc + op_immediate_b;
+wire [31:0] pc_branch = pc + immediate;
 wire branch_fired = op_funct3 == 0 && reg_s1 == reg_s2 || //beq
                     op_funct3 == 1 && reg_s1 != reg_s2 || //bne
                     op_funct3 == 4 && reg_s1_signed <  reg_s2_signed || //blt
@@ -141,8 +156,8 @@ wire branch_fired = op_funct3 == 0 && reg_s1 == reg_s2 || //beq
 
 //короткие и длинные переходы (jal, jalr)
 wire [31:0] rd_jal = pc + 4;
-wire [31:0] pc_jal = pc + op_immediate_j;
-wire [31:0] pc_jalr = reg_s1 + op_immediate_i; //здесь действительно I-тип
+wire [31:0] pc_jal = pc + immediate;
+wire [31:0] pc_jalr = reg_s1 + immediate;
 
 //теперь комбинируем результат работы логики разных команд
 wire [31:0] stage1_rd = /*is_op_load ? rd_load :*/
@@ -215,8 +230,8 @@ wire [31:0] rd_load = stage2_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}},
 wire [31:0] stage2_rd_result = stage2_is_op_load ? rd_load : stage2_rd;
 
 //если пишем регистр, просим подождать предыдущие стадии
-wire stage2_rs1_equal = (stage2_op_rd == op_rs1) && (is_op_load || is_op_store || is_op_alu || is_op_alu_imm || is_op_branch || is_op_jalr);
-wire stage2_rs2_equal = (stage2_op_rd == op_rs2) && (is_op_store || is_op_alu || is_op_branch);
+wire stage2_rs1_equal = (stage2_op_rd == op_rs1) && (type_r || type_i || type_s || type_b);
+wire stage2_rs2_equal = (stage2_op_rd == op_rs2) && (type_r || type_s || type_b);
 wire stage2_rd_fired = stage2_is_rd_changed && (stage2_rs1_equal || stage2_rs2_equal);
 //если сохраняем в память и сразу читаем, тоже ждём
 wire stage2_memory_fired = (stage2_is_op_store && (is_op_load || is_op_store) && stage2_addr[31:2] == data_address[31:2]);
