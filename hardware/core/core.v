@@ -132,7 +132,7 @@ RiscVAlu alu(
 				.enabled(!stage1_pause),
 				.is_op_alu(is_op_alu),
 				.is_op_alu_imm(is_op_alu_imm),
-				.op_funct3_in(op_funct3),
+				.op_funct3(op_funct3),
 				.op_funct7(op_funct7),
 				.reg_s1(reg_s1),
 				.reg_s2(reg_s2),

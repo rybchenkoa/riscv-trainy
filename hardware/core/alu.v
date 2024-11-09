@@ -6,7 +6,7 @@ module RiscVAlu
 	
 	input is_op_alu, //операция с двумя регистрами
 	input is_op_alu_imm, //операция с регистром и константой
-	input [2:0] op_funct3_in, //код операции
+	input [2:0] op_funct3, //код операции
 	input [6:0] op_funct7, //код операции
 	input [31:0] reg_s1, //первый регистр-операнд
 	input [31:0] reg_s2, //второй регистр-операнд
@@ -15,20 +15,17 @@ module RiscVAlu
 	output is_alu_wait //надо ли ждать операцию до следующего такта
 );
 
-//немного стабилизации входов
-wire [2:0] op_funct3_a = (is_op_alu || is_op_alu_imm) ? op_funct3_in : 3'b0;
-
 //обработка (add, sub, xor, or, and, sll, srl, sra, slt, sltu)
 //в случае лёгких инструкций вычисляем результат сразу
-wire [31:0] alu_operand2 = is_op_alu ? reg_s2 : is_op_alu_imm ? imm : 0;
-wire [31:0] rd_alu1 = op_funct3_a == 3'd0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
-					  op_funct3_a == 3'd4 ? reg_s1 ^ alu_operand2 :
-					  op_funct3_a == 3'd6 ? reg_s1 | alu_operand2 :
-					  op_funct3_a == 3'd7 ? reg_s1 & alu_operand2 :
-					  op_funct3_a == 3'd1 ? reg_s1 << alu_operand2[4:0] :
-					  op_funct3_a == 3'd5 ? (op_funct7[5] ? $signed(reg_s1) >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
-					  op_funct3_a == 3'd2 ? $signed(reg_s1) < $signed(alu_operand2) :
-					  op_funct3_a == 3'd3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
+wire [31:0] alu_operand2 = is_op_alu_imm ? imm : reg_s2;
+wire [31:0] rd_alu1 = op_funct3 == 3'd0 ? (is_op_alu && op_funct7[5] ? reg_s1 - alu_operand2 : reg_s1 + alu_operand2) :
+					  op_funct3 == 3'd4 ? reg_s1 ^ alu_operand2 :
+					  op_funct3 == 3'd6 ? reg_s1 | alu_operand2 :
+					  op_funct3 == 3'd7 ? reg_s1 & alu_operand2 :
+					  op_funct3 == 3'd1 ? reg_s1 << alu_operand2[4:0] :
+					  op_funct3 == 3'd5 ? (op_funct7[5] ? $signed(reg_s1) >>> alu_operand2[4:0] : reg_s1 >> alu_operand2[4:0]) :
+					  op_funct3 == 3'd2 ? $signed(reg_s1) < $signed(alu_operand2) :
+					  op_funct3 == 3'd3 ? reg_s1 < alu_operand2 : //TODO для больших imm проверить
 					  0; //невозможный результат
 
 `ifdef __MULTIPLY__
@@ -47,7 +44,6 @@ reg rem_sign;
 
 //расшифровываем инструкцию
 wire is_op_muldiv = enabled && is_op_alu && op_funct7[0];
-wire [2:0] op_funct3 = is_op_muldiv ? op_funct3_in : 3'b0; //отдельная стабилизация для модуля M
 wire is_op_multiply = !op_funct3[2];
 wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
 //wire is_op_mul_low = op_funct3[1:0] == 0; //mul
