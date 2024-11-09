@@ -81,6 +81,7 @@ wire is_op_add_upper = op_code == `opcode_add_upper;
 wire is_op_branch = op_code == `opcode_branch;
 wire is_op_jal = op_code == `opcode_jal;
 wire is_op_jalr = op_code == `opcode_jalr;
+wire is_op_multiply = is_op_alu && op_funct7[0];
 
 wire error_opcode = !(is_op_load || is_op_store ||
                     is_op_alu || is_op_alu_imm ||
@@ -123,13 +124,10 @@ assign data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
 //(add, sub, xor, or, and, sll, srl, sra, slt, sltu)
-//(mul, mulh, mulsu, mulu, div, divu, rem, remu)
 wire [31:0] rd_alu;
-wire is_alu_wait;
 RiscVAlu alu(
 				.clock(clock),
 				.reset(reset),
-				.enabled(!stage1_pause),
 				.is_op_alu(is_op_alu),
 				.is_op_alu_imm(is_op_alu_imm),
 				.op_funct3(op_funct3),
@@ -137,9 +135,24 @@ RiscVAlu alu(
 				.reg_s1(reg_s1),
 				.reg_s2(reg_s2),
 				.imm(immediate),
-				.rd_alu(rd_alu),
-				.is_alu_wait(is_alu_wait)
+				.rd_alu(rd_alu)
 			);
+
+`ifdef __MULTIPLY__
+//(mul, mulh, mulsu, mulu, div, divu, rem, remu)
+wire [31:0] rd_mul;
+wire is_mul_wait;
+RiscVMul mul(
+				.clock(clock),
+				.reset(reset),
+				.enabled(!stage1_pause && is_op_multiply),
+				.op_funct3(op_funct3),
+				.reg_s1(reg_s1),
+				.reg_s2(reg_s2),
+				.rd_mul(rd_mul),
+				.is_mul_wait(is_mul_wait)
+			);
+`endif
 
 //обработка upper immediate
 wire [31:0] rd_load_upper = immediate; //lui
@@ -161,6 +174,9 @@ wire [31:0] pc_jalr = reg_s1 + immediate;
 
 //теперь комбинируем результат работы логики разных команд
 wire [31:0] stage1_rd = /*is_op_load ? rd_load :*/
+`ifdef __MULTIPLY__
+						is_op_multiply ? rd_mul :
+`endif
 						is_op_alu || is_op_alu_imm ? rd_alu :
 						is_op_load_upper ? rd_load_upper :
 						is_op_add_upper ? rd_add_upper :
@@ -168,7 +184,11 @@ wire [31:0] stage1_rd = /*is_op_load ? rd_load :*/
 						: 0;
 
 //на текущем такте инструкция ещё не готова
-wire is_wait_instruction = is_alu_wait;
+wire is_wait_instruction = 0
+`ifdef __MULTIPLY__
+							|| is_mul_wait
+`endif
+							;
 //запрещено ли переходить к следующей инструкции
 wire lock_pc = stage1_pause || stage1_reset || is_wait_instruction;
 
