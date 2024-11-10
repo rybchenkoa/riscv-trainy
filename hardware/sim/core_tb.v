@@ -70,7 +70,7 @@ end
 reg [31:0] old_data;
 reg [31:0] old_data_out;
 reg [31:0] old_addr;
-reg [31:0] old_width;
+reg [1:0] old_width;
 reg old_data_w;
 reg old_data_r;
 always@(posedge clock) begin
