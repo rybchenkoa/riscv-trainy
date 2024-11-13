@@ -27,22 +27,32 @@ assign pc_val = pc;
 assign rs1 = rs1_index == 0 ? 0 : regs[rs1_index];
 assign rs2 = rs2_index == 0 ? 0 : regs[rs2_index];
 
+`ifdef SIMULATION
 integer i;
+initial begin
+	for (i = 1; i < `REG_COUNT; i = i + 1) begin
+		regs[i] = 0;
+	end
+end
+`endif
+
 always@(posedge clock or posedge reset)
 begin
 	if (reset == 1) begin
-		for (i = 1; i < `REG_COUNT; i = i + 1) regs[i] = 0;
 		pc = 0;
 	end
 	else begin
 		if (enable_write_pc) begin
 			pc <= pc_next;
 		end
+	end
+end
 
-		//regs[enable_write_rd ? 0 : rd_index] <= rd; //так более красиво, но занимает больше места
-		if (enable_write_rd) begin
-			regs[rd_index] <= rd;
-		end
+always@(posedge clock)
+begin
+	//regs[enable_write_rd ? 0 : rd_index] <= rd; //так более красиво, но занимает больше места
+	if (enable_write_rd) begin
+		regs[rd_index] <= rd;
 	end
 end
 
