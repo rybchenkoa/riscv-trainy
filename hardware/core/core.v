@@ -38,18 +38,19 @@ assign instruction_address = stage0_pc;
 //этап 1 ======================================
 
 //инструкция уже в регистре, обрабатываем
-wire stage1_pause; //флаг остановки стадии конвейера
-reg stage1_reset; //флаг перезапуска конвейера, на старте адрес инструкции уже есть, а самой инструкции нет
+wire stage1_jam_up; //стадия остановлена следующей стадией
+reg stage1_empty; //стадия конвейера не получила инструкцию с предыдущего этапа
+wire stage1_pause = stage1_empty || stage1_jam_up; //стадии пока нельзя работать
 //сохраняем адрес инструкции с предыдущего этапа
 wire [31:0] pc; //pc <= stage0_pc
 
 always@(posedge clock or posedge reset)
 begin
 	if (reset == 1) begin
-		stage1_reset <= 1;
+		stage1_empty <= 1;
 	end
 	else begin
-		stage1_reset <= 0;
+		stage1_empty <= 0;
 	end
 end
 
@@ -184,15 +185,15 @@ wire [31:0] stage1_rd = /*is_op_load ? rd_load :*/
 						: 0;
 
 //на текущем такте инструкция ещё не готова
-wire is_wait_instruction = 0
+wire stage1_working = 0
 `ifdef __MULTIPLY__
 							|| is_mul_wait
 `endif
 							;
 //запрещено ли переходить к следующей инструкции
-wire lock_pc = stage1_pause || stage1_reset || is_wait_instruction;
+wire stage1_wait = stage1_pause || stage1_working;
 
-assign stage0_pc = lock_pc ? pc :
+assign stage0_pc = stage1_wait ? pc :
 						(is_op_branch && branch_fired) ? pc_branch :
 						is_op_jal ? pc_jal :
 						is_op_jalr ? pc_jalr :
@@ -204,7 +205,7 @@ wire write_rd_instruction = is_op_load || is_op_alu || is_op_alu_imm
 							|| is_op_jal || is_op_jalr;
 
 //инструкция меняет значение регистра
-wire is_rd_changed = (!(is_wait_instruction || op_rd == 0)) && write_rd_instruction;
+wire is_rd_changed = (!(stage1_working || op_rd == 0)) && write_rd_instruction;
 
 //этап 2 ======================================
 //полученное из памяти значение записываем в регистр
@@ -216,7 +217,7 @@ reg [31:0] stage2_addr;
 reg [31:0] stage2_rd;
 reg[4:0] stage2_op_rd;
 reg stage2_is_rd_changed;
-reg stage2_last_lock;
+reg stage2_empty; //ничего не делаем, потому что предыдущая стадия ничего не передала
 
 always@(posedge clock or posedge reset)
 begin
@@ -228,7 +229,7 @@ begin
 		stage2_rd <= 0;
 		stage2_op_rd <= 0;
 		stage2_is_rd_changed <= 0;
-		stage2_last_lock <= 0;
+		stage2_empty <= 0;
 	end
 	else begin
 		stage2_funct3 <= op_funct3;
@@ -238,7 +239,7 @@ begin
 		stage2_rd <= stage1_rd;
 		stage2_op_rd <= op_rd;
 		stage2_is_rd_changed <= is_rd_changed;
-		stage2_last_lock <= stage1_pause;
+		stage2_empty <= stage1_wait;
 	end
 end
 
@@ -256,14 +257,14 @@ wire stage2_rd_fired = stage2_is_rd_changed && (stage2_rs1_equal || stage2_rs2_e
 //если сохраняем в память и сразу читаем, тоже ждём
 wire stage2_memory_fired = (stage2_is_op_store && (is_op_load || is_op_store) && stage2_addr[31:2] == data_address[31:2]);
 //если на прошлом такте блокировали, пропускаем конвейер дальше, так как инструкция уже обработана
-assign stage1_pause = !stage2_last_lock && (stage2_rd_fired || stage2_memory_fired);
+assign stage1_jam_up = !stage2_empty && (stage2_rd_fired || stage2_memory_fired);
 
 //набор регистров
 RiscVRegs regs(
 	.clock(clock),
 	.reset(reset),
 	
-	.enable_write_pc(!lock_pc),
+	.enable_write_pc(!stage1_wait),
 	.pc_val(pc), //текущий адрес инструкции
 	.pc_next(stage0_pc), //сохраняем в регистр адрес следующей инструкции
 
@@ -272,7 +273,7 @@ RiscVRegs regs(
 	.rs1(reg_s1),
 	.rs2(reg_s2),
 	
-	.enable_write_rd(stage2_is_rd_changed), //пишем результат обработки операции
+	.enable_write_rd(stage2_is_rd_changed && !stage2_empty), //пишем результат обработки операции
 	.rd_index(stage2_op_rd),
 	.rd(stage2_rd_result)
 );
