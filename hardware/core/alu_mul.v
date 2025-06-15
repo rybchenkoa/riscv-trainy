@@ -1,3 +1,5 @@
+`include "common.vh"
+
 module RiscVMul
 (
 	input clock,
@@ -12,7 +14,58 @@ module RiscVMul
 );
 
 // РАСШИРЕНИЕ M
-//обработка (mul, mulh, mulsu, mulu, div, divu, rem, remu)
+//обработка (mul, mulh, mulhsu, mulu, div, divu, rem, remu)
+//расшифровываем инструкцию
+wire is_op_muldiv = enabled;
+wire is_op_multiply = !op_funct3[2];
+wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
+//wire is_op_mul_low = op_funct3[1:0] == 0; //mul
+wire is_op_mul_extend_sign = op_funct3[1:0] == 2; //mulhsu //умножаем как беззнаковые, но сам знак надо расширить до 64 бит
+wire is_op_div_signed = !op_funct3[0]; //div, rem
+//wire is_op_remainder = op_funct3[2]; //rem, remu
+
+//для умножения со знаком достаточно убрать знак у короткого сомножителя
+//но для деления надо убрать у обоих, поэтому делаем единообразно
+wire need_restore_sign = is_op_multiply ? is_op_mul_signed : is_op_div_signed;
+wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 1'b0; // = sign(x) * sign(y)
+wire rem_sign_start = need_restore_sign ? reg_s1[31] : 1'b0; // = sign(x)
+wire [31:0] start_x = (need_restore_sign && $signed(reg_s1) < 0) ? -reg_s1 : reg_s1;
+wire [31:0] start_y = (need_restore_sign && $signed(reg_s2) < 0) ? -reg_s2 : reg_s2;
+
+`ifdef __FAST_MULDIV__
+
+assign is_mul_wait = 0;
+wire [31:0] quotient;
+wire [31:0] remainder;
+wire [31:0] mul_1;
+wire [31:0] mul_2;
+
+RiscVFastDiv fd(
+		.x(start_x),
+		.y(start_y),
+		.quotient(quotient),
+		.remainder(remainder)
+	);
+
+assign {mul_2, mul_1} = start_x * start_y;
+
+// если считать беззнаковым: -a * b = ((1<<32)-a) * b = -a * b + (b << 32)
+// для получения mulhsu надо после умножения сделать вычитание беззнакового из старших разрядов
+wire [31:0] mulhsu = mul_2 - (reg_s1[31] ? reg_s2 : 0);
+wire [63:0] mul_result = start_muldiv_sign ? -{mul_2, mul_1} : {mul_2, mul_1};
+wire [31:0] quotient_signed = start_muldiv_sign ? -quotient : quotient;
+wire [31:0] remainder_signed = rem_sign_start ? -remainder : remainder;
+assign rd_mul =     op_funct3 == 3'd0 ? mul_result[31:0]  : //mul
+					op_funct3 == 3'd1 ? mul_result[63:32] : //mulh
+					op_funct3 == 3'd2 ? mulhsu            : //mulhsu
+					op_funct3 == 3'd3 ? mul_result[63:32] : //mulu
+					op_funct3 == 3'd4 ? quotient_signed :   //div
+					op_funct3 == 3'd5 ? quotient_signed :   //divu
+					op_funct3 == 3'd6 ? remainder_signed :  //rem
+					/*op_funct3 == 7 ?*/ remainder_signed;  //remu
+
+`else
+
 //при умножении значения входных переменных могут меняться, поэтому запоминаем их локально
 //инструкция запоминается снаружи, её надо сохранять не только для этого блока
 //регистры используем для обоих операций
@@ -24,28 +77,12 @@ reg muldiv_sign;
 //для остатка от деления знак берётся из делимого
 reg rem_sign;
 
-//расшифровываем инструкцию
-wire is_op_muldiv = enabled;
-wire is_op_multiply = !op_funct3[2];
-wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
-//wire is_op_mul_low = op_funct3[1:0] == 0; //mul
-wire is_op_mul_extend_sign = op_funct3[1:0] == 2; //musu //умножаем как беззнаковые, но сам знак надо расширить до 64 бит
-wire is_op_div_signed = !op_funct3[0]; //div, rem
-//wire is_op_remainder = op_funct3[2]; //rem, remu
-
 //если хоть где-то ноль, результат можно выдать сразу
 wire need_wait = is_op_muldiv && reg_s1 && reg_s2;
 
 //инициализируем инструкцию
 //перемножение {r3, r2} = {r1 = sign, x} * y
 //деление {r3=q, r2=rem} = x / y , r1=msb - счётчик цикла, он же самый значимый бит
-//для умножения со знаком достаточно убрать знак у короткого сомножителя
-//но для деления надо убрать у обоих, поэтому делаем единообразно
-wire need_restore_sign = is_op_multiply ? is_op_mul_signed : is_op_div_signed;
-wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 1'b0; // = sign(x) * sign(y)
-wire rem_sign_start = need_restore_sign ? reg_s1[31] : 1'b0; // = sign(x)
-wire [31:0] start_x = (need_restore_sign && $signed(reg_s1) < 0) ? -reg_s1 : reg_s1;
-wire [31:0] start_y = (need_restore_sign && $signed(reg_s2) < 0) ? -reg_s2 : reg_s2;
 wire [31:0] start_msb = start_x[31:24] != 8'b0 ? (1 << 31) : //легковесная подгонка начального счётчика цикла
 						start_x[23:16] != 8'b0 ? (1 << 23) :
 						start_x[15:8] != 8'b0 ? (1 << 15) :
@@ -136,5 +173,7 @@ begin
 		end
 	end
 end
+
+`endif //FAST_MULDIV
 
 endmodule

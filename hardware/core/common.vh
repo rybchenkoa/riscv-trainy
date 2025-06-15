@@ -5,6 +5,8 @@
 
 //аппаратное умножение и деление целых чисел
 `define __MULTIPLY__
+//умножение и деление за один такт
+//`define __FAST_MULDIV__
 
 `ifdef    __ICARUS__
 	`define  SIMULATION
