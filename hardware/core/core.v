@@ -257,7 +257,13 @@ wire stage2_rd_fired = stage2_is_rd_changed && (stage2_rs1_equal || stage2_rs2_e
 //если сохраняем в память и сразу читаем, тоже ждём
 wire stage2_memory_fired = (stage2_is_op_store && (is_op_load || is_op_store) && stage2_addr[31:2] == data_address[31:2]);
 //если на прошлом такте блокировали, пропускаем конвейер дальше, так как инструкция уже обработана
-assign stage1_jam_up = !stage2_empty && (stage2_rd_fired || stage2_memory_fired);
+assign stage1_jam_up = !stage2_empty && (/*stage2_rd_fired ||*/ stage2_memory_fired);
+
+wire [31:0] reg_s1_file;
+wire [31:0] reg_s2_file;
+
+assign reg_s1 = (stage2_is_rd_changed && stage2_rs1_equal) ? stage2_rd_result : reg_s1_file;
+assign reg_s2 = (stage2_is_rd_changed && stage2_rs2_equal) ? stage2_rd_result : reg_s2_file;
 
 //набор регистров
 RiscVRegs regs(
@@ -270,8 +276,8 @@ RiscVRegs regs(
 
 	.rs1_index(op_rs1), //читаем регистры-аргументы
 	.rs2_index(op_rs2),
-	.rs1(reg_s1),
-	.rs2(reg_s2),
+	.rs1(reg_s1_file),
+	.rs2(reg_s2_file),
 	
 	.enable_write_rd(stage2_is_rd_changed && !stage2_empty), //пишем результат обработки операции
 	.rd_index(stage2_op_rd),
