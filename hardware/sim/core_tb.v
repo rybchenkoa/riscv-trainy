@@ -1,12 +1,22 @@
 `include "common.vh"
 `timescale 1ns / 1ns
 
-module core_tb;
+`ifdef SIMULATION
+	module core_tb;
+	`define MEMORY_SIZE (2**16/4)
+`else
+	module core_tb(clock, reset, out);
+	`define MEMORY_SIZE (2**14/4)
+`endif
 
-`define MEMORY_SIZE (2**16/4)
-
+`ifdef SIMULATION
 reg clock = 0;
 reg reset = 1;
+`else
+input wire clock;
+input wire reset;
+`endif
+output reg out;
 reg [1:0] reset_counter = 2;
 reg [31:0] rom [0:`MEMORY_SIZE-1]; //память
 wire [31:0] i_addr;
@@ -22,6 +32,7 @@ wire [3:0] byte_mask;
 reg [31:0] timer;
 reg [31:0] timer_divider;
 
+`ifdef SIMULATION
 integer i, fdesc, fres;
 initial while(1) #1 clock = !clock;
 initial
@@ -42,6 +53,7 @@ always@(posedge clock) begin
 	reset_counter <= reset_counter == 0 ? 0 : reset_counter - 1;
 	reset <= reset_counter != 0;
 end
+`endif
 
 RiscVCore core0
 (
@@ -130,5 +142,6 @@ always@(posedge clock) begin
 			timer_divider <= timer_divider + 1;
 		end
 	end
+	out <= data_w; //TODO, добавить реальный вывод данных наружу
 end
 endmodule
