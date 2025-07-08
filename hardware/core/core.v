@@ -212,8 +212,6 @@ wire is_rd_changed = (!(stage1_working || op_rd == 0)) && write_rd_instruction;
 //место изменения регистра только одно, чтобы не возникало лишних задержек
 reg [2:0] stage2_funct3;
 reg stage2_is_op_load;
-reg stage2_is_op_store;
-reg [31:0] stage2_addr;
 reg [31:0] stage2_rd;
 reg[4:0] stage2_op_rd;
 reg stage2_is_rd_changed;
@@ -221,11 +219,9 @@ reg stage2_empty; //ничего не делаем, потому что пред
 
 always@(posedge clock or posedge reset)
 begin
-	if (reset == 1) begin
+	if (reset) begin
 		stage2_funct3 <= 0;
 		stage2_is_op_load <= 0;
-		stage2_is_op_store <= 0;
-		stage2_addr <= 0;
 		stage2_rd <= 0;
 		stage2_op_rd <= 0;
 		stage2_is_rd_changed <= 0;
@@ -234,8 +230,6 @@ begin
 	else begin
 		stage2_funct3 <= op_funct3;
 		stage2_is_op_load <= is_op_load;
-		stage2_is_op_store <= is_op_store;
-		stage2_addr <= data_address;
 		stage2_rd <= stage1_rd;
 		stage2_op_rd <= op_rd;
 		stage2_is_rd_changed <= is_rd_changed;
@@ -253,11 +247,8 @@ wire [31:0] stage2_rd_result = stage2_is_op_load ? rd_load : stage2_rd;
 //если пишем регистр, просим подождать предыдущие стадии
 wire stage2_rs1_equal = (stage2_op_rd == op_rs1) && (type_r || type_i || type_s || type_b);
 wire stage2_rs2_equal = (stage2_op_rd == op_rs2) && (type_r || type_s || type_b);
-wire stage2_rd_fired = stage2_is_rd_changed && (stage2_rs1_equal || stage2_rs2_equal);
-//если сохраняем в память и сразу читаем, тоже ждём
-wire stage2_memory_fired = (stage2_is_op_store && (is_op_load || is_op_store) && stage2_addr[31:2] == data_address[31:2]);
-//если на прошлом такте блокировали, пропускаем конвейер дальше, так как инструкция уже обработана
-assign stage1_jam_up = !stage2_empty && (/*stage2_rd_fired ||*/ stage2_memory_fired);
+//пока что память отвечает мгновенно
+assign stage1_jam_up = 0;
 
 wire [31:0] reg_s1_file;
 wire [31:0] reg_s2_file;
