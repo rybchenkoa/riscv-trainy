@@ -20,13 +20,15 @@ module RiscVCore
 	
 	output [31:0] instruction_address,
 	input  [31:0] instruction_data,
+	input         instruction_ready,
 	
 	output [31:0] data_address,
 	output [1:0]  data_width,
 	input  [31:0] data_in,
 	output [31:0] data_out,
 	output        data_read,
-	output        data_write
+	output        data_write,
+	input         data_ready
 );
 
 //этап 0 ======================================
@@ -39,23 +41,13 @@ assign instruction_address = stage0_pc;
 
 //инструкция уже в регистре, обрабатываем
 wire stage1_jam_up; //стадия остановлена следующей стадией
-reg stage1_empty; //стадия конвейера не получила инструкцию с предыдущего этапа
+wire stage1_empty = !instruction_ready; //стадия конвейера не получила инструкцию с предыдущего этапа
 wire stage1_pause = stage1_empty || stage1_jam_up; //стадии пока нельзя работать
 //сохраняем адрес инструкции с предыдущего этапа
 wire [31:0] pc; //pc <= stage0_pc
 
-always@(posedge clock or posedge reset)
-begin
-	if (reset == 1) begin
-		stage1_empty <= 1;
-	end
-	else begin
-		stage1_empty <= 0;
-	end
-end
-
 //получаем из шины инструкцию
-wire [31:0] instruction = instruction_data;
+wire [31:0] instruction = stage1_empty ? 0 : instruction_data;
 
 //расшифровываем код инструкции
 wire[6:0] op_code = instruction[6:0]; //код операции
@@ -113,15 +105,15 @@ wire signed [31:0] reg_s2_signed = reg_s2;
 
 
 //чтение памяти (lb, lh, lw, lbu, lhu), I-тип
-assign data_read = is_op_load && !stage1_pause;
+wire stage1_data_read = is_op_load && !stage1_pause;
 
 //запись памяти (sb, sh, sw), S-тип
-assign data_write = is_op_store && !stage1_pause;
-assign data_out = reg_s2;
+wire stage1_data_write = is_op_store && !stage1_pause;
+wire[31:0] stage1_data_out = reg_s2;
 
 //общее для чтения и записи
-assign data_address = (is_op_load || is_op_store) ? reg_s1 + immediate : 32'hz;
-assign data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
+wire[31:0] stage1_data_address = (is_op_load || is_op_store) ? reg_s1 + immediate : 0;
+wire[1:0] stage1_data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
 //(add, sub, xor, or, and, sll, srl, sra, slt, sltu)
@@ -212,25 +204,35 @@ wire is_rd_changed = (!(stage1_working || op_rd == 0)) && write_rd_instruction;
 //место изменения регистра только одно, чтобы не возникало лишних задержек
 reg [2:0] stage2_funct3;
 reg stage2_is_op_load;
+reg stage2_is_op_store;
+reg [31:0] stage2_addr;
 reg [31:0] stage2_rd;
+reg [31:0] stage2_reg_s2; //повтор записи в память, если на первой стадии не сработало
 reg[4:0] stage2_op_rd;
 reg stage2_is_rd_changed;
 reg stage2_empty; //ничего не делаем, потому что предыдущая стадия ничего не передала
+wire stage2_wait; //ожидание ответа от памяти
 
 always@(posedge clock or posedge reset)
 begin
 	if (reset) begin
 		stage2_funct3 <= 0;
 		stage2_is_op_load <= 0;
+		stage2_is_op_store <= 0;
+		stage2_addr <= 0;
 		stage2_rd <= 0;
+		stage2_reg_s2 <= 0;
 		stage2_op_rd <= 0;
 		stage2_is_rd_changed <= 0;
-		stage2_empty <= 0;
+		stage2_empty <= 1;
 	end
-	else begin
+	else if (!stage2_wait) begin
 		stage2_funct3 <= op_funct3;
 		stage2_is_op_load <= is_op_load;
+		stage2_is_op_store <= is_op_store;
+		stage2_addr <= data_address;
 		stage2_rd <= stage1_rd;
+		stage2_reg_s2 <= reg_s2;
 		stage2_op_rd <= op_rd;
 		stage2_is_rd_changed <= is_rd_changed;
 		stage2_empty <= stage1_wait;
@@ -244,17 +246,29 @@ wire [31:0] rd_load = stage2_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}},
 
 wire [31:0] stage2_rd_result = stage2_is_op_load ? rd_load : stage2_rd;
 
-//если пишем регистр, просим подождать предыдущие стадии
-wire stage2_rs1_equal = (stage2_op_rd == op_rs1) && (type_r || type_i || type_s || type_b);
-wire stage2_rs2_equal = (stage2_op_rd == op_rs2) && (type_r || type_s || type_b);
-//пока что память отвечает мгновенно
-assign stage1_jam_up = 0;
+//новое значение регистра пробрасываем на предыдущий этап, чтобы не ждать
+wire stage2_rs1_equal = (stage2_op_rd == op_rs1);// && (type_r || type_i || type_s || type_b);
+wire stage2_rs2_equal = (stage2_op_rd == op_rs2);// && (type_r || type_s || type_b);
 
 wire [31:0] reg_s1_file;
 wire [31:0] reg_s2_file;
 
 assign reg_s1 = (stage2_is_rd_changed && stage2_rs1_equal) ? stage2_rd_result : reg_s1_file;
 assign reg_s2 = (stage2_is_rd_changed && stage2_rs2_equal) ? stage2_rd_result : reg_s2_file;
+
+wire stage2_write_ready = stage2_is_rd_changed && !stage2_empty && !stage2_wait;
+
+// если не успели обработать память, просим подождать
+wire stage2_memory_wait = (stage2_is_op_load || stage2_is_op_store) && !data_ready;
+assign stage2_wait = stage2_memory_wait;
+assign stage1_jam_up = stage2_wait;
+
+// повторяем запрос к памяти при необходимости
+assign data_read = stage2_memory_wait ? stage2_is_op_load : stage1_data_read;
+assign data_write = stage2_memory_wait ? stage2_is_op_store : stage1_data_write;
+assign data_out = stage2_memory_wait ? stage2_reg_s2 : stage1_data_out;
+assign data_address = stage2_memory_wait ? stage2_addr : stage1_data_address;
+assign data_width = stage2_memory_wait ? stage2_funct3[1:0] : stage1_data_width;
 
 //набор регистров
 RiscVRegs regs(
@@ -270,7 +284,7 @@ RiscVRegs regs(
 	.rs1(reg_s1_file),
 	.rs2(reg_s2_file),
 	
-	.enable_write_rd(stage2_is_rd_changed && !stage2_empty), //пишем результат обработки операции
+	.enable_write_rd(stage2_write_ready), //пишем результат обработки операции
 	.rd_index(stage2_op_rd),
 	.rd(stage2_rd_result)
 );

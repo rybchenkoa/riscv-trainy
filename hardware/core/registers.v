@@ -34,6 +34,9 @@ initial begin
 		regs[i] = 0;
 	end
 end
+
+wire [31:0] ra = regs[1];
+wire [31:0] sp = regs[2];
 `endif
 
 always@(posedge clock or posedge reset)

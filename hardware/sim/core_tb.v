@@ -18,19 +18,11 @@ input wire reset;
 `endif
 output reg out;
 reg [1:0] reset_counter = 2;
+
 reg [7:0] rom_0 [0:`MEMORY_SIZE-1]; //память
 reg [7:0] rom_1 [0:`MEMORY_SIZE-1]; //память
 reg [7:0] rom_2 [0:`MEMORY_SIZE-1]; //память
 reg [7:0] rom_3 [0:`MEMORY_SIZE-1]; //память
-wire [31:0] i_addr;
-reg [31:0] i_data;
-wire [31:0] d_addr;
-wire [31:0] d_data_in;
-wire [31:0] d_data_out;
-wire data_r;
-wire data_w;
-wire [1:0] d_width; //0-byte, 1-half, 2-word
-wire [3:0] byte_mask;
 
 reg [31:0] timer;
 reg [31:0] timer_divider;
@@ -61,81 +53,143 @@ always@(posedge clock) begin
 end
 `endif
 
+// процессор
+wire [31:0] instruction_address;
+wire [31:0] instruction_value;
+wire        instruction_ready;
+wire [31:0] core_data_address;
+wire [1:0]  core_data_width;
+wire [31:0] core_data_in;
+wire [31:0] core_data_out;
+wire        core_data_read;
+wire        core_data_write;
+wire        core_data_ready;
+
 RiscVCore core0
 (
 	.clock(clock),
 	.reset(reset),
 	//.irq,
 	
-	.instruction_address(i_addr),
-	.instruction_data(i_data),
+	.instruction_address(instruction_address),
+	.instruction_data(instruction_value),
+	.instruction_ready(instruction_ready),
 	
-	.data_address(d_addr),
-	.data_width(d_width),
-	.data_in(d_data_in),
-	.data_out(d_data_out),
-	.data_read(data_r),
-	.data_write(data_w)
+	.data_address(core_data_address),
+	.data_width(core_data_width),
+	.data_in(core_data_in),
+	.data_out(core_data_out),
+	.data_read(core_data_read),
+	.data_write(core_data_write),
+	.data_ready(core_data_ready)
 );
 
-//шина инструкций всегда выровнена
-always@(posedge clock) begin
-	i_data <= {rom_3[i_addr[31:2]],
-				rom_2[i_addr[31:2]],
-				rom_1[i_addr[31:2]],
-				rom_0[i_addr[31:2]]};
-end
+wire [31:0] memory_address;
+wire        memory_read;
+wire        memory_write;
+wire [31:0] memory_in;
+reg  [31:0] memory_out;
+wire        memory_ready;
+reg [31:0]  memory_address_requested;
 
-//теперь выравниваем данные
-//делаем невыровненный доступ, точнее выровненный по байтам
-reg [31:0] old_data;
-reg [31:0] old_addr;
-reg old_data_r;
-always@(posedge clock) begin
-	old_data <= (data_r || data_w) ? {rom_3[d_addr[31:2]],
-										rom_2[d_addr[31:2]],
-										rom_1[d_addr[31:2]],
-										rom_0[d_addr[31:2]]
-									}: 32'hz;
-	old_addr <= d_addr;
-	old_data_r <= data_r;
-end
+wire [31:0] bus_data_out;
+wire        bus_data_read;
+wire        bus_data_write;
+wire        bus_data_ready;
 
-//вешаем на общую шину регистры и память
-wire [1:0] old_addr_tail = old_addr[1:0];
-assign d_data_in = !old_data_r ? 32'hz : old_addr == 32'h40000008 ? timer :
-	old_addr < `MEMORY_SIZE * 4 ? (old_data >> (old_addr_tail * 8)) : 32'hz; //TODO data_read не нужен?
-
-//для чтения данных маска накладывается в ядре, здесь только для записи
-wire [1:0] addr_tail = d_addr[1:0];
-assign byte_mask = !data_w? 0 : 
-                   d_width == 0 ? 4'b0001 << addr_tail :
-                   d_width == 1 ? 4'b0011 << addr_tail :
-                                  4'b1111;
-
-//раз для побайтового чтения надо делать побайтовый сдвиг
-//то для полуслов дешевле не ограничивать выравниванием на два байта
-//TODO нужна проверка выхода за границы слова?
-wire [31:0] aligned_out = d_data_out << addr_tail * 8;
-
-always@(posedge clock) begin
-	if (byte_mask[3]) rom_3[d_addr[31:2]] <= aligned_out[31:24];
-	if (byte_mask[2]) rom_2[d_addr[31:2]] <= aligned_out[23:16];
-	if (byte_mask[1]) rom_1[d_addr[31:2]] <= aligned_out[15:8];
-	if (byte_mask[0]) rom_0[d_addr[31:2]] <= aligned_out[7:0];
+// кэш процессора
+RiscVBus bus0
+(
+	.clock(clock),
+	.reset(reset),
 	
-	if (data_w && d_addr == 32'h4000_0004) begin
-		//отладочный вывод
-		$write("%c", d_data_out);
+	.memory_address(memory_address),
+	.memory_read(memory_read),
+	.memory_write(memory_write),
+	.memory_in(memory_out),
+	.memory_out(memory_in),
+	.memory_ready(memory_ready),
+	.memory_address_requested(memory_address_requested),
+	
+	.instruction_address(instruction_address),
+	.instruction_value(instruction_value),
+	.instruction_ready(instruction_ready),
+	
+	.data_address(core_data_address),
+	.data_width(core_data_width),
+	.data_read(bus_data_read),
+	.data_write(bus_data_write),
+	.data_in(core_data_out),
+	.data_out(bus_data_out),
+	.data_ready(bus_data_ready)
+);
+
+// оперативная память
+always@(posedge clock) begin
+	if (memory_read) begin
+		memory_out <= {
+			rom_3[memory_address[31:2]],
+			rom_2[memory_address[31:2]],
+			rom_1[memory_address[31:2]],
+			rom_0[memory_address[31:2]]
+		};
 	end
-	else if (data_r && d_addr == 32'h40000008) begin
-		; //таймер читать можно
+	else begin
+		memory_out <= 32'hz;
 	end
-	else if ((data_r || data_w) && (d_addr < 8'hff || d_addr > `MEMORY_SIZE * 4)) begin
+	
+	if (memory_write) begin
+		{
+			rom_3[memory_address[31:2]],
+			rom_2[memory_address[31:2]],
+			rom_1[memory_address[31:2]],
+			rom_0[memory_address[31:2]]
+		}
+		<= memory_in;
+	end
+	
+	if (memory_read || memory_write) begin
+		memory_address_requested <= memory_address;
+	end
+end
+
+assign memory_ready = 1;
+
+//периферия
+wire is_periph_write = (core_data_address == 32'h40000004);
+wire is_periph_read = (core_data_address == 32'h40000008);
+wire periph_used = is_periph_read || is_periph_write;
+reg [31:0] periph_out;
+reg periph_used_old;
+
+always@(posedge clock) begin
+	// процессор читает периферию как память
+	// поэтому делаем задержку
+	periph_used_old <= periph_used;
+	periph_out <= core_data_address == 32'h40000008 ? timer : 32'hz;
+	
+	if (core_data_write && core_data_address == 32'h40000004) begin
+		$write("%c", core_data_out); // отладочный вывод
+	end
+	
+	// если читаем или пишем невалидный адрес и не из периферии
+	if ((core_data_read || core_data_write) && 
+		(core_data_address < 8'hff || core_data_address > `MEMORY_SIZE * 4) && 
+		!periph_used)
+	begin
 		//нулевые указатели и выход за границы приводит к прекращению работы
 		$finish();
 	end
-	
+end
+
+// подключение периферии и кэша к процессору
+// вешаем на общую шину регистры и память
+assign bus_data_read = periph_used ? 0 : core_data_read;
+assign bus_data_write = periph_used ? 0 : core_data_write;
+assign core_data_in = periph_used_old ? periph_out : bus_data_out;
+assign core_data_ready = periph_used_old ? 1 : bus_data_ready;
+
+always@(posedge clock) begin
 	if(reset) begin
 		timer = 0;
 		timer_divider = 0;
@@ -147,6 +201,6 @@ always@(posedge clock) begin
 			timer_divider <= timer_divider + 1;
 		end
 	end
-	out <= data_w; //TODO, добавить реальный вывод данных наружу
+	out <= bus_data_write; //TODO, добавить реальный вывод данных наружу
 end
 endmodule
