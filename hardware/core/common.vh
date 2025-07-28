@@ -12,8 +12,17 @@
 	`define  SIMULATION
 `endif
 
+// размер кэша инструкций и данных
+// в обоих случаях полезно иметь хотя бы 1 элемент
+// для инструкций - чтобы не занимать постоянно шину памяти
+// для данных - чтобы делать побайтовую обработку
+`define CACHE_INSTRUCTIONS_SIZE 8
+`define CACHE_DATA_SIZE 8
+
+// количество регистров в ядре
+//для embedded число регистров меньше
 `ifdef __RV32E__
-    `define REG_COUNT 16 //для embedded число регистров меньше
+    `define REG_COUNT 16
 `else
     `define REG_COUNT 32
 `endif

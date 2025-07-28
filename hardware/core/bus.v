@@ -1,5 +1,5 @@
-`define CACHE_INSTRUCTIONS_SIZE 8
-`define CACHE_DATA_SIZE 8
+// шина с подключением кэша, процесора и памяти
+`include "common.vh"
 
 module RiscVBus
 (

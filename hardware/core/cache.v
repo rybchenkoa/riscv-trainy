@@ -1,5 +1,5 @@
-`define CACHE_INSTRUCTIONS_SIZE 8
-`define CACHE_DATA_SIZE 8
+// кэш с ассоциативным хранилищем
+`include "common.vh"
 
 module RiscVCacheCommon
 #(parameter SIZE = 8)
@@ -20,23 +20,28 @@ module RiscVCacheCommon
 	input         data_read,    // запрос на чтение данных из кэша
 	input         data_write,   // запрос на запись данных в кэш
 	input  [31:0] data_in,      // записываемые в кэш данные
-	output reg[31:0] data_out,     // прочитанные из кэша данные
+	output [31:0] data_out,     // прочитанные из кэша данные
 	output        data_ready    // отработал ли запрос на обработку данных
 );
 
+// ответ памяти мультиплексируем с ответом кэша, чтобы не ждать лишний такт
+// поэтому на выходе после регистров есть немного комбинаторики
 //reg [31:0] data_out;
-// при чтении значение известно сразу, а при записи ответ от памяти приходит через регистр, поэтому мультиплексируем
 //reg        data_ready;
-reg data_read_ready; // запрос на чтение обработан
-reg write_requested; // запрос на запись отправлен
+reg write_requested;     // запрос памяти на запись отправлен
+reg read_requested;      // запрос памяти на чтение отправлен и нужен для чтения
+reg cache_out_ready;     // ответ кэша получен
+reg [31:0] cache_out;    // ответ кэша
+reg [1:0] stage1_address_tail; // на сколько байт сдвинуть ответ
 
+// хранилище данных кэша
 reg [31:0]   cache_value   [0:SIZE-1];  // значения самой памяти
 reg [31-2:0] cache_address [0:SIZE-1];  // виртуальные адреса
 reg          cache_filled  [0:SIZE-1];  // значение есть в наличии
 
 // ниже всё должно быть wire
-reg  [0:SIZE-1]        cache_address_equal; // совпал входной адрес ячейки
-reg  [1:SIZE-1]        cache_move_next    ; // надо ли читать данные слева
+reg          cache_address_equal[0:SIZE-1]; // совпал входной адрес ячейки
+reg          cache_move_next    [1:SIZE-1]; // надо ли читать данные слева
 reg          cache_hit;            // есть ли элемент с таким адресом
 reg  [31:0]  cache_hit_value;      // значение элемента по запрошенному адресу
 wire         cache_can_update;     // можно ли уже записать элемент наверх
@@ -112,7 +117,7 @@ assign write_mask = {{8{byte_enable[3]}}, {8{byte_enable[2]}}, {8{byte_enable[1]
 assign memory_address = {data_address[31:2], 2'b0};
 wire memory_has_response = memory_ready && (memory_address_requested == memory_address); // наш запрос к памяти отработал
 wire has_value = cache_hit || memory_has_response; // в наличии есть значение для чтения/модификации
-assign memory_read = (!has_value) && (data_read || write_need_request);
+assign memory_read = (!has_value) && (data_read || data_write && write_need_request);
 
 // пока что пишем в память мгновенно, как только есть данные
 assign memory_write = data_write && cache_can_update;
@@ -125,16 +130,22 @@ assign cache_can_update = (data_read || data_write) && has_value
 wire [31:0] cache_value_read = cache_hit ? cache_hit_value : memory_in;
 assign cache_value_update = (cache_value_read & ~write_mask) | (aligned_data_in & write_mask);
 
-wire [31:0] aligned_data_out = cache_value_read >> address_tail * 8;
-
+// пробрасываем ответ памяти напрямую ядру
 wire data_write_ready = write_requested && memory_ready;
+wire data_read_ready = read_requested && memory_ready || cache_out_ready;
 assign data_ready = data_read_ready || data_write_ready;
+
+// сдвигаем до нужного байта
+wire [31:0] raw_data_out = read_requested && memory_ready ? memory_in : cache_out;
+assign data_out = data_read_ready ? (raw_data_out >> stage1_address_tail * 8) : 32'hz;
 
 // выдаём запрошенные данные
 always@(posedge clock) begin
+	read_requested <= reset ? 0 : data_read && memory_read;
 	write_requested <= reset ? 0 : memory_write;
-	data_read_ready <= reset ? 0 : data_read && has_value;
-	data_out <= reset ? 32'hz : data_read && has_value ? aligned_data_out : 32'hz;
+	cache_out_ready <= reset ? 0 : data_read && has_value;
+	cache_out <= cache_value_read;
+	stage1_address_tail <= address_tail;
 end
 
 endmodule
