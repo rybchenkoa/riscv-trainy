@@ -6,12 +6,14 @@ module RiscVBus
 	input clock,
 	input reset,
 	
-	output [31:0] memory_address, // обращение к памяти по заданному адресу
+	output [31:0] memory_read_address, // обращение к памяти по заданному адресу
+	output [31:0] memory_write_address,
 	output        memory_read,    // запрос на чтение памяти
 	output        memory_write,   // запрос на запись в память
 	input  [31:0] memory_in,      // прочитанные из ОЗУ данные
 	output [31:0] memory_out,     // записываемые в ОЗУ данные
-	input         memory_ready,   // запрос к памяти отработал
+	input         memory_read_ready,   // запрос к памяти отработал
+	input         memory_write_ready,
 	input  [31:0] memory_address_requested, // запрос к какому адресу отработал
 	
 	input  [31:0] instruction_address, // процессор запрашивает инструкцию
@@ -87,18 +89,21 @@ data_cache(
 // инструкции читаем в первую очередь
 // мультиплексируем входы памяти
 wire instruction_need = instruction_memory_read;
-assign memory_address = instruction_need ? instruction_memory_address : data_memory_address;
+assign memory_read_address = instruction_need ? instruction_memory_address : data_memory_address;
+assign memory_write_address = data_memory_address;
 assign memory_read = instruction_need ? instruction_memory_read : data_memory_read;
-assign memory_write = instruction_need ? 0 : data_memory_write;
+assign memory_write = data_memory_write;
 assign memory_out = data_memory_out;
 
 // ответ на следующем такте, так что запоминаем, кому отвечать
 reg stage1_instruction_need;
+reg stage1_memory_write;
 always@(posedge clock) begin
 	stage1_instruction_need <= reset ? 0 : instruction_need;
+	stage1_memory_write <= reset ? 0 : memory_write;
 end
 
-assign instruction_memory_ready = stage1_instruction_need && memory_ready;
-assign data_memory_ready = !stage1_instruction_need && memory_ready;
+assign instruction_memory_ready = stage1_instruction_need ? memory_read_ready : 0;
+assign data_memory_ready = stage1_memory_write ? memory_write_ready : !stage1_instruction_need && memory_read_ready;
 
 endmodule

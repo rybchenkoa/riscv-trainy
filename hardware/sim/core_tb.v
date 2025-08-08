@@ -84,12 +84,14 @@ RiscVCore core0
 	.data_ready(core_data_ready)
 );
 
-wire [31:0] memory_address;
+wire [31:0] memory_read_address;
+wire [31:0] memory_write_address;
 wire        memory_read;
 wire        memory_write;
 wire [31:0] memory_in;
 reg  [31:0] memory_out;
-wire        memory_ready;
+wire        memory_read_ready;
+wire        memory_write_ready;
 reg [31:0]  memory_address_requested;
 
 wire [31:0] bus_data_out;
@@ -103,12 +105,14 @@ RiscVBus bus0
 	.clock(clock),
 	.reset(reset),
 	
-	.memory_address(memory_address),
+	.memory_read_address(memory_read_address),
+	.memory_write_address(memory_write_address),
 	.memory_read(memory_read),
 	.memory_write(memory_write),
 	.memory_in(memory_out),
 	.memory_out(memory_in),
-	.memory_ready(memory_ready),
+	.memory_read_ready(memory_read_ready),
+	.memory_write_ready(memory_write_ready),
 	.memory_address_requested(memory_address_requested),
 	
 	.instruction_address(instruction_address),
@@ -128,10 +132,10 @@ RiscVBus bus0
 always@(posedge clock) begin
 	if (memory_read) begin
 		memory_out <= {
-			rom_3[memory_address[31:2]],
-			rom_2[memory_address[31:2]],
-			rom_1[memory_address[31:2]],
-			rom_0[memory_address[31:2]]
+			rom_3[memory_read_address[31:2]],
+			rom_2[memory_read_address[31:2]],
+			rom_1[memory_read_address[31:2]],
+			rom_0[memory_read_address[31:2]]
 		};
 	end
 	else begin
@@ -140,20 +144,21 @@ always@(posedge clock) begin
 	
 	if (memory_write) begin
 		{
-			rom_3[memory_address[31:2]],
-			rom_2[memory_address[31:2]],
-			rom_1[memory_address[31:2]],
-			rom_0[memory_address[31:2]]
+			rom_3[memory_write_address[31:2]],
+			rom_2[memory_write_address[31:2]],
+			rom_1[memory_write_address[31:2]],
+			rom_0[memory_write_address[31:2]]
 		}
 		<= memory_in;
 	end
 	
 	if (memory_read || memory_write) begin
-		memory_address_requested <= memory_address;
+		memory_address_requested <= memory_read_address;
 	end
 end
 
-assign memory_ready = 1;
+assign memory_read_ready = 1;
+assign memory_write_ready = 1;
 
 //периферия
 wire is_periph_write = (core_data_address == 32'h40000004);
