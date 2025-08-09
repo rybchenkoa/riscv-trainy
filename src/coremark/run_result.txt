@@ -3,8 +3,8 @@ vvp.exe tmp_sim
 CoreMark start 0
 2K performance run parameters for coremark.
 CoreMark Size    : 666
-Total ticks      : 3722
-Total time (secs): 37
+Total ticks      : 3877
+Total time (secs): 38
 Iterations/Sec   : 0
 Iterations       : 1
 Compiler version : GCC12.2.0
@@ -16,6 +16,6 @@ seedcrc          : 0xe9f5
 [0]crcstate      : 0x8e3a
 [0]crcfinal      : 0xe714
 Correct operation validated. See README.md for run and reporting rules.
-CoreMark end 3980
+CoreMark end 4141
 
-$finish called at 805375 (1ns)
+$finish called at 837641 (1ns)
