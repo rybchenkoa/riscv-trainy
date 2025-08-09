@@ -142,8 +142,8 @@ RiscVMul mul(
 				.op_funct3(op_funct3),
 				.reg_s1(reg_s1),
 				.reg_s2(reg_s2),
-				.rd_mul(rd_mul),
-				.is_mul_wait(is_mul_wait)
+				.rd(rd_mul),
+				.is_wait(is_mul_wait)
 			);
 `endif
 

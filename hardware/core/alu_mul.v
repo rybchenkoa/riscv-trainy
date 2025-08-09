@@ -9,8 +9,8 @@ module RiscVMul
 	input [2:0] op_funct3, //код операции
 	input [31:0] reg_s1, //первый регистр-операнд
 	input [31:0] reg_s2, //второй регистр-операнд
-	output [31:0] rd_mul, //результат работы
-	output is_mul_wait //надо ли ждать операцию до следующего такта
+	output [31:0] rd, //результат работы
+	output is_wait //надо ли ждать операцию до следующего такта
 );
 
 // РАСШИРЕНИЕ M
@@ -20,25 +20,43 @@ wire is_op_muldiv = enabled;
 wire is_op_multiply = !op_funct3[2];
 wire is_op_mul_signed = !op_funct3[1]; //mul, mulh
 //wire is_op_mul_low = op_funct3[1:0] == 0; //mul
-wire is_op_mul_extend_sign = op_funct3[1:0] == 2; //mulhsu //умножаем как беззнаковые, но сам знак надо расширить до 64 бит
+wire is_op_mul_signed_x = op_funct3[1:0] == 2; //mulhsu
 wire is_op_div_signed = !op_funct3[0]; //div, rem
-//wire is_op_remainder = op_funct3[2]; //rem, remu
+wire is_op_remainder = op_funct3[2:1] == 3; //rem, remu
 
-//для умножения со знаком достаточно убрать знак у короткого сомножителя
-//но для деления надо убрать у обоих, поэтому делаем единообразно
-wire need_restore_sign = is_op_multiply ? is_op_mul_signed : is_op_div_signed;
-wire start_muldiv_sign = need_restore_sign ? reg_s1[31] ^ reg_s2[31] : 1'b0; // = sign(x) * sign(y)
-wire rem_sign_start = need_restore_sign ? reg_s1[31] : 1'b0; // = sign(x)
-wire [31:0] start_x = (need_restore_sign && $signed(reg_s1) < 0) ? -reg_s1 : reg_s1;
-wire [31:0] start_y = (need_restore_sign && $signed(reg_s2) < 0) ? -reg_s2 : reg_s2;
+//убираем знак у операндов
+wire need_restore_sign_x = is_op_multiply ? is_op_mul_signed || is_op_mul_signed_x : is_op_div_signed;
+wire need_restore_sign_y = is_op_multiply ? is_op_mul_signed : is_op_div_signed;
+wire sign_x = need_restore_sign_x && reg_s1[31];
+wire sign_y = need_restore_sign_y && reg_s2[31];
 
-`ifdef __FAST_MULDIV__
+wire start_muldiv_sign = sign_x ^ sign_y; // = sign(x) * sign(y)
+wire start_rem_sign = sign_x;
+wire [31:0] start_x = sign_x ? -reg_s1 : reg_s1;
+wire [31:0] start_y = sign_y ? -reg_s2 : reg_s2;
 
-assign is_mul_wait = 0;
-wire [31:0] quotient;
-wire [31:0] remainder;
+// ==========================================
+// быстрое умножение
+`ifdef __FAST_MUL__
+
 wire [31:0] mul_1;
 wire [31:0] mul_2;
+
+assign {mul_2, mul_1} = start_x * start_y;
+
+wire [63:0] mul_result = {mul_2, mul_1};
+wire mul_sign = start_muldiv_sign;
+wire is_mul_wait = 0;
+wire is_mul_null = 0; // нули на входе
+
+`endif // __FAST_MUL__
+
+// ==========================================
+// быстрое деление
+`ifdef __FAST_DIV__
+
+wire [31:0] quotient;
+wire [31:0] remainder;
 
 RiscVFastDiv fd(
 		.x(start_x),
@@ -47,29 +65,27 @@ RiscVFastDiv fd(
 		.remainder(remainder)
 	);
 
-assign {mul_2, mul_1} = start_x * start_y;
+wire [31:0] div = quotient;
+wire [31:0] rem = remainder;
+wire div_sign = start_muldiv_sign;
+wire rem_sign = start_rem_sign;
+wire is_div_wait = 0;
+wire is_div_null = 0;
 
-// если считать беззнаковым: -a * b = ((1<<32)-a) * b = -a * b + (b << 32)
-// для получения mulhsu надо после умножения сделать вычитание беззнакового из старших разрядов
-wire [31:0] mulhsu = mul_2 - (reg_s1[31] ? reg_s2 : 0);
-wire [63:0] mul_result = start_muldiv_sign ? -{mul_2, mul_1} : {mul_2, mul_1};
-wire [31:0] quotient_signed = start_muldiv_sign ? -quotient : quotient;
-wire [31:0] remainder_signed = rem_sign_start ? -remainder : remainder;
-assign rd_mul =     op_funct3 == 3'd0 ? mul_result[31:0]  : //mul
-					op_funct3 == 3'd1 ? mul_result[63:32] : //mulh
-					op_funct3 == 3'd2 ? mulhsu            : //mulhsu
-					op_funct3 == 3'd3 ? mul_result[63:32] : //mulu
-					op_funct3 == 3'd4 ? quotient_signed :   //div
-					op_funct3 == 3'd5 ? quotient_signed :   //divu
-					op_funct3 == 3'd6 ? remainder_signed :  //rem
-					/*op_funct3 == 7 ?*/ remainder_signed;  //remu
+`endif // __FAST_DIV__
 
-`else
+`ifdef __FAST_MUL__
+`ifdef __FAST_DIV__
+`define NO_SLOW_MULDIV
+`endif
+`endif
 
+// многотактное умножение и деление
+`ifndef NO_SLOW_MULDIV
 //при умножении значения входных переменных могут меняться, поэтому запоминаем их локально
 //инструкция запоминается снаружи, её надо сохранять не только для этого блока
 //регистры используем для обоих операций
-reg [31:0] x, y, r1, r2, r3;
+reg [31:0] x, y;
 //после начала работы не ориентируемся на входные значения
 reg in_progress;
 //считаем для беззнаковых, знак меняем в конце
@@ -79,77 +95,87 @@ reg rem_sign;
 
 //если хоть где-то ноль, результат можно выдать сразу
 wire need_wait = is_op_muldiv && reg_s1 && reg_s2;
+wire divmul_active = is_wait || in_progress;
 
-//инициализируем инструкцию
-//перемножение {r3, r2} = {r1 = sign, x} * y
-//деление {r3=q, r2=rem} = x / y , r1=msb - счётчик цикла, он же самый значимый бит
+// ==========================================
+// поразрядное умножение
+`ifndef __FAST_MUL__
+
+// mul_val = mul_x * mul_y
+reg [63:0] mul_x, mul_val;
+reg [31:0] mul_y;
+
+wire [63:0] start_mul_x = {32'b0, start_x};
+wire [63:0] next_mul_val = mul_val + (mul_y[0] ? mul_x : 0);
+wire [31:0] next_mul_y = mul_y >> 1;
+
+always@(posedge clock)
+begin
+	if (divmul_active) begin
+		mul_x   <= in_progress ? mul_x << 1   : start_mul_x;
+		mul_y   <= in_progress ? mul_y >> 1   : start_y;
+		mul_val <= in_progress ? next_mul_val : 0;
+	end
+end
+
+wire [63:0] mul_result = next_mul_val;
+wire mul_sign = muldiv_sign;
+wire mul_end = next_mul_y == 0; //условие окончания умножения
+wire is_mul_wait = !in_progress ? need_wait : !mul_end;
+wire is_mul_null = !need_wait;
+
+`else
+wire mul_end = 1;
+`endif // !__FAST_MUL__
+
+// ==========================================
+// деление в столбик
+`ifndef __FAST_DIV__
+
+// {quotient, remainder} = x / y , msb - счётчик цикла, он же самый значимый бит
+reg [31:0] quotient, remainder, msb;
 wire [31:0] start_msb = start_x[31:24] != 8'b0 ? (1 << 31) : //легковесная подгонка начального счётчика цикла
 						start_x[23:16] != 8'b0 ? (1 << 23) :
 						start_x[15:8] != 8'b0 ? (1 << 15) :
 						(1 << 7);
-wire [31:0] start_r1 = !is_op_multiply ? start_msb :
-						is_op_mul_extend_sign ? (reg_s1[31] ? -1 : 0) :
-						0;
 
-//обрабатываем в цикле
-//умножение
-wire [31:0] next_mul_y = (y >> 1); //поразрядное умножение
-wire [63:0] current_mul_x = {r1, x}; //берём текущий x
-wire [63:0] next_mul_x = current_mul_x << 1; //сдвигаем
-wire [63:0] next_mul_val = {r3, r2} + (y[0] ? current_mul_x : 0); //и прибавляем к результату
-wire mul_end = next_mul_y == 0; //условие окончания умножения
+wire [31:0] next_msb = msb >> 1; // выбираем следующий разряд делимого
+wire [31:0] next_remainder_0 = {remainder[30:0], msb & x ? 1'b1 : 1'b0}; // приписываем к остатку
+wire [31:0] remainder_delta = next_remainder_0 - y; // вычитаем делитель если набралось достаточно
+wire [31:0] next_remainder = $signed(remainder_delta) >= 0 ? remainder_delta : next_remainder_0;
+wire [31:0] next_quotient = {quotient[30:0], ~remainder_delta[31]}; //приписываем разряд к частному
 
-//деление в столбик
-//y (делитель) не меняем
-//x (делимое) не меняем
-wire [31:0] current_msb = r1;
-wire [31:0] current_rem = r2;
-wire [31:0] current_div_val = r3;
-wire [31:0] next_msb = (current_msb >> 1); // выбираем следующий разряд делимого
-wire [31:0] next_rem_tmp = {current_rem[30:0], current_msb & x ? 1'b1 : 1'b0}; // приписываем к остатку
-//если остаток больше или равен (то есть делится на делитель), то вычитаем
-//конкретную цифру подбирать не надо, так как двоичная система
-wire [31:0] div_remainder_delta = next_rem_tmp - y;
-wire [31:0] next_rem_val = $signed(div_remainder_delta) >= 0 ? div_remainder_delta : next_rem_tmp;
-wire [31:0] next_div_val = {current_div_val[30:0], ~div_remainder_delta[31]}; //приписываем разряд к частному
+always@(posedge clock)
+begin
+	if (divmul_active) begin
+		quotient  <= in_progress ? next_quotient  : 0;
+		remainder <= in_progress ? next_remainder : 0;
+		msb       <= in_progress ? next_msb       : start_msb;
+	end
+end
+
+wire [31:0] div = next_quotient;
+wire [31:0] rem = next_remainder;
+wire div_sign = muldiv_sign;
+//wire rem_sign = rem_sign;
+
 wire div_end = next_msb == 0;
+wire is_div_wait = !in_progress ? need_wait : !div_end;
+wire is_div_null = !need_wait;
 
-//комбинируем значения для заполнения регистров
-//в теории регистры можно переставить, сдвиг и условие выхода кажутся похожими
-wire [31:0] next_x = is_op_multiply ? next_mul_x[31:0] : x;
-wire [31:0] next_y = is_op_multiply ? next_mul_y : y;
-wire [31:0] next_r1 = is_op_multiply ? next_mul_x[63:32] : next_msb;
-wire [31:0] next_r2 = is_op_multiply ? next_mul_val[31:0] : next_rem_val;
-wire [31:0] next_r3 = is_op_multiply ? next_mul_val[63:32] : next_div_val;
-wire divmul_end = is_op_multiply ? mul_end : div_end; //блок умножения закончил вычислять
-wire next_in_progress = in_progress && !divmul_end; //когда законил, выключаем регистр активности блока
+`else
+wire div_end = 1;
+`endif // !__FAST_DIV__
 
-wire [63:0] mul_result = muldiv_sign ? -next_mul_val : next_mul_val;
-wire [31:0] div_result = muldiv_sign ? -next_div_val : next_div_val;
-wire [31:0] rem_result = rem_sign ? -next_rem_val : next_rem_val;
-assign rd_mul = !in_progress ? 0 : //на нулевом такте всё равно может быть только ноль
-					!divmul_end ? 0 : //пока процесс идёт, не качаем затворы
-					op_funct3 == 3'd0 ? mul_result[31:0] : //mul
-					op_funct3 == 3'd1 ? mul_result[63:32] : //mulh
-					op_funct3 == 3'd2 ? mul_result[63:32] : //mulsu
-					op_funct3 == 3'd3 ? mul_result[63:32] : //mulu
-					op_funct3 == 3'd4 ? div_result : //div
-					op_funct3 == 3'd5 ? div_result : //divu
-					op_funct3 == 3'd6 ? rem_result : //rem
-					/*op_funct3 == 7 ?*/ rem_result;  //remu
+//когда блок закончил вычислять, выключаем регистр активности блока
+wire divmul_end = is_op_multiply ? mul_end : div_end;
+wire next_in_progress = in_progress && !divmul_end;
 
-//когда нельзя переходить к следующей инструкции
-assign is_mul_wait = !in_progress ? need_wait : !divmul_end;
-
-wire divmul_active = need_wait || in_progress;
 always@(posedge clock or posedge reset)
 begin
-	if (reset == 1) begin
+	if (reset) begin
 		x <= 0;
 		y <= 0;
-		r1 <= 0;
-		r2 <= 0;
-		r3 <= 0;
 		in_progress <= 0;
 	end
 	else if (divmul_active) begin
@@ -157,23 +183,42 @@ begin
 			in_progress <= 1'b1;
 			x <= start_x;
 			y <= start_y;
-			r1 <= start_r1; //расширение первого сомножителя знаком до 64 бит или счётчик цикла
-			r2 <= 0; //младшие биты произведения или остаток
-			r3 <= 0; //старшие биты произведения или частное
 			muldiv_sign <= start_muldiv_sign; //надо ли в конце сменить знак
-			rem_sign <= rem_sign_start;
+			rem_sign <= start_rem_sign;
 		end
 		else begin
-			in_progress = next_in_progress;
-			x <= next_x;
-			y <= next_y;
-			r1 <= next_r1;
-			r2 <= next_r2;
-			r3 <= next_r3;
+			in_progress <= next_in_progress;
 		end
 	end
 end
 
-`endif //FAST_MULDIV
+`endif // !NO_SLOW_MULDIV
+
+// делаем один сумматор на выходе
+wire [63:0] rd_positive = is_op_multiply ? mul_result :
+						is_op_remainder ? rem :
+						div;
+
+wire [63:0] rd_sign = is_op_multiply ? mul_sign :
+						is_op_remainder ? rem_sign :
+						div_sign;
+
+wire [31:0] rd_1, rd2;
+assign {rd_2, rd_1} = rd_sign ? -rd_positive : rd_positive;
+
+wire is_null = is_op_multiply ? is_mul_null : is_div_null;
+
+assign rd = is_null ? 0 :
+	op_funct3 == 3'd0 ? rd_1 : // mul
+	op_funct3 == 3'd1 ? rd_2 : // mulh
+	op_funct3 == 3'd2 ? rd_2 : // mulhsu
+	op_funct3 == 3'd3 ? rd_2 : // mulhu
+	op_funct3 == 3'd4 ? rd_1 : // div
+	op_funct3 == 3'd5 ? rd_1 : // divu
+	op_funct3 == 3'd6 ? rd_1 : // rem
+	/*op_funct3 == 7 ?*/ rd_1; // remu
+
+//когда нельзя переходить к следующей инструкции
+assign is_wait = is_op_multiply ? is_mul_wait : is_div_wait;
 
 endmodule
