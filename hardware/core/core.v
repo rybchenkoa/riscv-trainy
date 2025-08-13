@@ -33,21 +33,37 @@ module RiscVCore
 
 //этап 0 ======================================
 
-//на нулевом этапе выдаём адрес инструкции на шину и дальше вместе с инструкцией посылаем на первый этап
-wire [31:0] stage0_pc;
-assign instruction_address = stage0_pc;
+// на нулевом этапе выдаём адрес инструкции на шину и дальше вместе с инструкцией посылаем на первый этап
+// запрашиваем со следующего адреса, и если не угадали, ставим флаг неактуальности
+wire [31:0] pc;          // адрес текущей инструкции
+wire [31:0] stage0_pc;   // адрес, вычисленный текущей инструкцией
+wire stage0_pc_changed;  // был ли в текущей инструкции переход
+wire stage0_instruction_frozen; // надо ли переходить к следующей инструкции
+
+reg stage0_pc_actual;          // инструкция запрошена по правильному адресу
+reg stage0_instruction_repeat; // инструкция многотактовая
+reg [31:0] last_instruction;   // предыдущая инструкция
+wire [31:0] instruction;
+
+always@(posedge clock or posedge reset) begin
+	stage0_pc_actual <= reset ? 0 : !stage0_pc_changed;
+	stage0_instruction_repeat  <= reset ? 0 : stage0_instruction_frozen;
+	last_instruction <= reset ? 0 : instruction;
+	//pc <= stage0_pc; это делается в модуле регистров
+end
+
+// при переходе перезапрашиваем по сохранённому адресу, иначе по следующему
+assign instruction_address = !stage0_pc_actual ? pc : pc + 4; 
+
+//получаем из шины инструкцию или повторяем предыдущее значение, если инструкция многотактовая
+assign instruction = stage1_empty ? 0 : stage0_instruction_repeat ? last_instruction : instruction_data;
 
 //этап 1 ======================================
 
 //инструкция уже в регистре, обрабатываем
 wire stage1_jam_up; //стадия остановлена следующей стадией
-wire stage1_empty = !instruction_ready; //стадия конвейера не получила инструкцию с предыдущего этапа
+wire stage1_empty = !stage0_pc_actual || !instruction_ready; //стадия конвейера не получила инструкцию с предыдущего этапа
 wire stage1_pause = stage1_empty || stage1_jam_up; //стадии пока нельзя работать
-//сохраняем адрес инструкции с предыдущего этапа
-wire [31:0] pc; //pc <= stage0_pc
-
-//получаем из шины инструкцию
-wire [31:0] instruction = stage1_empty ? 0 : instruction_data;
 
 //расшифровываем код инструкции
 wire[6:0] op_code = instruction[6:0]; //код операции
@@ -190,6 +206,9 @@ assign stage0_pc = stage1_wait ? pc :
 						is_op_jal ? pc_jal :
 						is_op_jalr ? pc_jalr :
 						pc + 4;
+
+assign stage0_instruction_frozen = !stage1_empty && stage1_wait;
+assign stage0_pc_changed = !stage1_wait && (is_op_branch && branch_fired || is_op_jal || is_op_jalr);
 
 //инструкция меняет регистр
 wire write_rd_instruction = is_op_load || is_op_alu || is_op_alu_imm 
