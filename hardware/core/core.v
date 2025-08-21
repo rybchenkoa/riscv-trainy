@@ -129,7 +129,7 @@ wire[31:0] stage1_data_out = reg_s2;
 
 //общее для чтения и записи
 wire[31:0] stage1_data_address = (is_op_load || is_op_store) ? reg_s1 + immediate : 0;
-wire[1:0] stage1_data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
+//wire[1:0] stage1_data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
 //(add, sub, xor, or, and, sll, srl, sra, slt, sltu)
@@ -218,76 +218,156 @@ wire write_rd_instruction = is_op_load || is_op_alu || is_op_alu_imm
 //инструкция меняет значение регистра
 wire is_rd_changed = (!(stage1_working || op_rd == 0)) && write_rd_instruction;
 
+// этап доступа к памяти ======================================
+// сохраняем рассчитанные значения с прошлого этапа и подаём их на вход памяти
+// при условии, что предыдущий запрос отработал
+// поэтому выбор данных и подача делается на следующем этапе
+
+reg [2:0]  stage_m_funct3; // как расширить знак прочитанного значения
+reg        stage_m_data_read;
+reg        stage_m_data_write;
+reg [31:0] stage_m_address;
+reg [31:0] stage_m_data_out; // значение для записи в память
+reg [31:0] stage_m_rd_value; // значение для записи в регистр-назначение, если операция не связана с памятью
+reg [4:0]  stage_m_rd_index;
+reg        stage_m_is_rd_changed;
+reg        stage_m_empty; // ничего не делаем, потому что предыдущий этап ничего не передал
+wire       stage_m_jam_up;  // ждём, потому что память занята предыдущим запросом
+wire       stage_m_wait = stage_m_jam_up; // этот этап справляется за один такт, если только другие не тормозят
+
+always@(posedge clock or posedge reset)
+begin
+	if (reset) begin
+
+		stage_m_funct3 <= 0;
+		stage_m_data_read <= 0;
+		stage_m_data_write <= 0;
+		stage_m_address <= 0;
+		stage_m_data_out <= 0;
+		stage_m_rd_value <= 0;
+		stage_m_rd_index <= 0;
+		stage_m_is_rd_changed <= 0;
+		stage_m_empty <= 1;
+	end
+	else if (!stage_m_wait) begin
+		stage_m_funct3     <= op_funct3;
+		stage_m_data_read  <= stage1_data_read;
+		stage_m_data_write <= stage1_data_write;
+		stage_m_address    <= stage1_data_address;
+		stage_m_data_out   <= stage1_data_out;
+		stage_m_rd_value   <= stage1_rd;
+		stage_m_rd_index   <= op_rd;
+		stage_m_is_rd_changed <= is_rd_changed;
+		stage_m_empty      <= stage1_wait;
+	end
+end
+
+// отработает ли полученный запрос точно за один раз
+// если это просто сохранение регистра, то да
+wire stage_m_no_retry = stage_m_empty || !(stage_m_data_read || stage_m_data_write);
+
+// должен ли текущий этап сделать запись в rd
+wire stage_m_has_rd = !stage_m_empty && stage_m_is_rd_changed && !stage_m_data_read;
+
+// надо ли пробрасывать назад
+wire stage_m_rs1_equal = (stage_m_rd_index == op_rs1);// && (type_r || type_i || type_s || type_b);
+wire stage_m_rs2_equal = (stage_m_rd_index == op_rs2);// && (type_r || type_s || type_b);
+
+wire stage_m_rs1_used = stage_m_has_rd && stage_m_rs1_equal;
+wire stage_m_rs2_used = stage_m_has_rd && stage_m_rs2_equal;
+
+// m этап в любом случае не может выдать данные, прочитанные из памяти
+assign stage1_jam_up = stage_m_wait || !stage_m_empty && stage_m_data_read;
+
 //этап 2 ======================================
 //полученное из памяти значение записываем в регистр
-//место изменения регистра только одно, чтобы не возникало лишних задержек
-reg [2:0] stage2_funct3;
-reg stage2_is_op_load;
-reg stage2_is_op_store;
-reg [31:0] stage2_addr;
-reg [31:0] stage2_rd;
-reg [31:0] stage2_reg_s2; //повтор записи в память, если на первой стадии не сработало
-reg[4:0] stage2_op_rd;
-reg stage2_is_rd_changed;
-reg stage2_empty; //ничего не делаем, потому что предыдущая стадия ничего не передала
-wire stage2_wait; //ожидание ответа от памяти
+//место изменения регистра только одно, чтобы не создавать лишний порт записи
+
+reg [2:0]  stage2_funct3;
+reg        stage2_data_read;
+reg        stage2_data_write;
+reg [31:0] stage2_address;
+reg [31:0] stage2_data_out; // повтор записи в память, если на предыдущем этапе не сработало
+reg [4:0]  stage2_rd_index;
+reg        stage2_is_rd_changed;
+reg        stage2_empty; // ничего не делаем, если предыдущий этап ничего не передал
+wire       stage2_wait;  // ожидание ответа от памяти
 
 always@(posedge clock or posedge reset)
 begin
 	if (reset) begin
 		stage2_funct3 <= 0;
-		stage2_is_op_load <= 0;
-		stage2_is_op_store <= 0;
-		stage2_addr <= 0;
-		stage2_rd <= 0;
-		stage2_reg_s2 <= 0;
-		stage2_op_rd <= 0;
+		stage2_data_read <= 0;
+		stage2_data_write <= 0;
+		stage2_address <= 0;
+		stage2_data_out <= 0;
+		stage2_rd_index <= 0;
 		stage2_is_rd_changed <= 0;
 		stage2_empty <= 1;
 	end
 	else if (!stage2_wait) begin
-		stage2_funct3 <= op_funct3;
-		stage2_is_op_load <= is_op_load;
-		stage2_is_op_store <= is_op_store;
-		stage2_addr <= data_address;
-		stage2_rd <= stage1_rd;
-		stage2_reg_s2 <= reg_s2;
-		stage2_op_rd <= op_rd;
-		stage2_is_rd_changed <= is_rd_changed;
-		stage2_empty <= stage1_wait;
+		stage2_funct3     <= stage_m_funct3;
+		stage2_data_read  <= stage_m_data_read;
+		stage2_data_write <= stage_m_data_write;
+		stage2_address    <= stage_m_address;
+		stage2_data_out   <= stage_m_data_out;
+		stage2_rd_index   <= stage_m_rd_index;
+		stage2_is_rd_changed <= stage_m_is_rd_changed;
+		stage2_empty      <= stage_m_no_retry;
 	end
 end
 
-wire load_signed = ~stage2_funct3[2];
-wire [31:0] rd_load = stage2_funct3[1:0] == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
-                      stage2_funct3[1:0] == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
+// должен ли текущий этап сделать запись в rd
+wire stage2_has_rd = !stage2_empty && stage2_is_rd_changed;
+
+// если память не ответила, повторяем запрос
+wire stage2_memory_wait = !stage2_empty && !data_ready;
+
+// выбираем, от какого из этапов брать данные для запроса памяти
+assign data_read    = stage2_memory_wait ? stage2_data_read   : stage_m_data_read;
+assign data_write   = stage2_memory_wait ? stage2_data_write  : stage_m_data_write;
+assign data_out     = stage2_memory_wait ? stage2_data_out    : stage_m_data_out;
+assign data_address = stage2_memory_wait ? stage2_address     : stage_m_address;
+assign data_width   = stage2_memory_wait ? stage2_funct3[1:0] : stage_m_funct3[1:0];
+
+// получаем ответ из памяти
+wire [1:0] data_width_read = stage2_has_rd ? stage2_funct3[1:0] : stage_m_funct3[1:0];
+wire load_signed = ~(stage2_has_rd ? stage2_funct3[2] : stage_m_funct3[2]);
+
+wire [31:0] rd_load = data_width_read == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
+                      data_width_read == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
                       data_in; //2-word
 
-wire [31:0] stage2_rd_result = stage2_is_op_load ? rd_load : stage2_rd;
+// новое значение регистра пробрасываем на предыдущий этап, чтобы не ждать
+wire stage2_rs1_equal = (stage2_rd_index == op_rs1);// && (type_r || type_i || type_s || type_b);
+wire stage2_rs2_equal = (stage2_rd_index == op_rs2);// && (type_r || type_s || type_b);
 
-//новое значение регистра пробрасываем на предыдущий этап, чтобы не ждать
-wire stage2_rs1_equal = (stage2_op_rd == op_rs1);// && (type_r || type_i || type_s || type_b);
-wire stage2_rs2_equal = (stage2_op_rd == op_rs2);// && (type_r || type_s || type_b);
+wire stage2_rs1_used = stage2_has_rd && stage2_rs1_equal;
+wire stage2_rs2_used = stage2_has_rd && stage2_rs2_equal;
 
 wire [31:0] reg_s1_file;
 wire [31:0] reg_s2_file;
 
-assign reg_s1 = (stage2_is_rd_changed && stage2_rs1_equal) ? stage2_rd_result : reg_s1_file;
-assign reg_s2 = (stage2_is_rd_changed && stage2_rs2_equal) ? stage2_rd_result : reg_s2_file;
+assign reg_s1 = stage2_rs1_used ? rd_load : 
+				stage_m_rs1_used ? stage_m_rd_value :
+				reg_s1_file;
 
-wire stage2_write_ready = stage2_is_rd_changed && !stage2_empty && !stage2_wait;
+assign reg_s2 = stage2_rs2_used ? rd_load : 
+				stage_m_rs2_used ? stage_m_rd_value :
+				reg_s2_file;
+
+// здесь можно сделать внеочередное выполнение следующей инструкции
+// пока текущая инструкция читает память, записать следующее значение reg[op_rd] = rd
+// но пока не будем так делать, иначе потом сложно будет обрабатывать прерывания
+wire [31:0] selected_rd_value = stage2_has_rd ? rd_load : stage_m_rd_value;
+wire [4:0]  selected_rd_index = stage2_has_rd ? stage2_rd_index : stage_m_rd_index;
+
+// если две записи в регистр, то пишем в порядке очереди
+assign stage_m_jam_up = stage2_wait || stage2_has_rd && stage_m_has_rd;
+wire stage2_enable_write_rd = !stage2_wait && (stage2_has_rd || stage_m_has_rd);
 
 // если не успели обработать память, просим подождать
-wire stage2_memory_wait = (stage2_is_op_load || stage2_is_op_store) && !data_ready;
 assign stage2_wait = stage2_memory_wait;
-assign stage1_jam_up = stage2_wait;
-
-// повторяем запрос к памяти при необходимости
-assign data_read = stage2_memory_wait ? stage2_is_op_load : stage1_data_read;
-assign data_write = stage2_memory_wait ? stage2_is_op_store : stage1_data_write;
-assign data_out = stage2_memory_wait ? stage2_reg_s2 : stage1_data_out;
-assign data_address = stage2_memory_wait ? stage2_addr : stage1_data_address;
-assign data_width = stage2_memory_wait ? stage2_funct3[1:0] : stage1_data_width;
 
 //набор регистров
 RiscVRegs regs(
@@ -303,9 +383,9 @@ RiscVRegs regs(
 	.rs1(reg_s1_file),
 	.rs2(reg_s2_file),
 	
-	.enable_write_rd(stage2_write_ready), //пишем результат обработки операции
-	.rd_index(stage2_op_rd),
-	.rd(stage2_rd_result)
+	.enable_write_rd(stage2_enable_write_rd), //пишем результат обработки операции
+	.rd_index(selected_rd_index),
+	.rd(selected_rd_value)
 );
 
 endmodule
