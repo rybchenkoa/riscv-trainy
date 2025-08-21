@@ -37,6 +37,19 @@ end
 
 wire [31:0] ra = regs[1];
 wire [31:0] sp = regs[2];
+wire [31:0] gp = regs[3];
+wire [31:0] tp = regs[4];
+wire [31:0] t0 = regs[5];
+wire [31:0] t1 = regs[6];
+wire [31:0] t2 = regs[7];
+wire [31:0] s0_fp = regs[8];
+wire [31:0] s1 = regs[9];
+wire [31:0] a0 = regs[10];
+wire [31:0] a1 = regs[11];
+wire [31:0] a2 = regs[12];
+wire [31:0] a3 = regs[13];
+wire [31:0] a4 = regs[14];
+wire [31:0] a5 = regs[15];
 `endif
 
 always@(posedge clock or posedge reset)
