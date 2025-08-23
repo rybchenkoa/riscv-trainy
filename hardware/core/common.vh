@@ -27,3 +27,9 @@
 `else
     `define REG_COUNT 32
 `endif
+
+`ifdef SIMULATION
+	`define ONLY_SIM(text) text
+`else
+	`define ONLY_SIM(text)
+`endif

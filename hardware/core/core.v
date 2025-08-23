@@ -239,7 +239,8 @@ wire stage_e_data_write = stage_e_is_op_store && !stage_e_pause;
 wire[31:0] stage_e_data_out = stage_e_rs2;
 
 //общее для чтения и записи
-wire[31:0] stage_e_address = stage_e_rs1 + stage_e_immediate;
+wire[31:0] stage_e_address = `ONLY_SIM( !(stage_e_data_read || stage_e_data_write) ? 0 : )
+							stage_e_rs1 + stage_e_immediate;
 //wire[1:0] stage_e_data_width = op_funct3[1:0]; //0-byte, 1-half, 2-word
 
 //обработка арифметических операций
@@ -473,7 +474,8 @@ assign data_width   = stage2_memory_wait ? stage2_funct3[1:0] : stage_m_funct3[1
 wire [1:0] data_width_read = stage2_has_rd ? stage2_funct3[1:0] : stage_m_funct3[1:0];
 wire load_signed = ~(stage2_has_rd ? stage2_funct3[2] : stage_m_funct3[2]);
 
-wire [31:0] rd_load = data_width_read == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
+wire [31:0] rd_load = `ONLY_SIM( stage2_empty || !stage2_data_read || !data_ready ? 32'hz : )
+                      data_width_read == 0 ? {{24{load_signed & data_in[7]}}, data_in[7:0]} : //0-byte
                       data_width_read == 1 ? {{16{load_signed & data_in[15]}}, data_in[15:0]} : //1-half
                       data_in; //2-word
 
@@ -487,12 +489,14 @@ wire stage2_rs2_used = stage2_has_rd && stage2_rs2_equal;
 wire [31:0] reg_s1_file;
 wire [31:0] reg_s2_file;
 
-assign reg_s1 = stage_e_rs1_used ? stage_e_rd_value :
+assign reg_s1 = `ONLY_SIM( !use_rs1 ? 32'hz : )
+				stage_e_rs1_used ? stage_e_rd_value :
 				stage_m_rs1_used ? stage_m_rd_value :
 				stage2_rs1_used ? rd_load :
 				reg_s1_file;
 
-assign reg_s2 = stage_e_rs2_used ? stage_e_rd_value :
+assign reg_s2 = `ONLY_SIM( !use_rs2 ? 32'hz : )
+				stage_e_rs2_used ? stage_e_rd_value :
 				stage_m_rs2_used ? stage_m_rd_value :
 				stage2_rs2_used ? rd_load :
 				reg_s2_file;

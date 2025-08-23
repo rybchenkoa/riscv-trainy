@@ -138,9 +138,9 @@ always@(posedge clock) begin
 			rom_0[memory_read_address[31:2]]
 		};
 	end
-	else begin
+	/*else begin
 		memory_out <= 32'hz;
-	end
+	end*/
 	
 	if (memory_write) begin
 		{
@@ -171,7 +171,7 @@ always@(posedge clock) begin
 	// процессор читает периферию как память
 	// поэтому делаем задержку
 	periph_used_old <= periph_used;
-	periph_out <= core_data_address == 32'h40000008 ? timer : 32'hz;
+	periph_out <= core_data_address == 32'h40000008 ? timer : (`ONLY_SIM( 1 ? 32'hz : ) 0);
 	
 	if (core_data_write && core_data_address == 32'h40000004) begin
 		$write("%c", core_data_out); // отладочный вывод

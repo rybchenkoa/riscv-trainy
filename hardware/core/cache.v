@@ -124,7 +124,9 @@ end
 
 // подключили управление к хранилищу, теперь обрабатываем операции
 //этап 0 ======================================
-assign memory_address = {data_address[31:2], 2'b0};
+assign memory_address = `ONLY_SIM( !(memory_read || memory_write) ? 32'hz : ) 
+						{data_address[31:2], 2'b0};
+
 // декодируем инструкцию
 // запись при первой попытке преобразуется в чтение, если меняем часть слова, которого нет в кэше
 wire write_need_request;   // нужно ли перед записью запросить данные из памяти
@@ -180,7 +182,8 @@ wire [31:0] stage1_out_value = stage1_hit ? stage1_hit_value : memory_in;
 assign data_ready = stage1_read_ready || stage1_write_ready;
 
 // значение сдвигаем до нужного байта
-assign data_out = stage1_read_ready ? (stage1_out_value >> stage1_address_tail * 8) : 32'hz;
+assign data_out = `ONLY_SIM( !stage1_read_ready ? 32'hz : )
+					(stage1_out_value >> stage1_address_tail * 8);
 
 // пробрасываем значения назад
 assign cache_filled_0 = stage1_hit || memory_ready;
