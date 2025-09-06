@@ -88,7 +88,8 @@ data_cache(
 
 // инструкции читаем в первую очередь
 // мультиплексируем входы памяти
-wire instruction_need = instruction_memory_read;
+//wire instruction_need = instruction_memory_read;
+wire instruction_need = !data_memory_read;
 assign memory_read_address = instruction_need ? instruction_memory_address : data_memory_address;
 assign memory_write_address = data_memory_address;
 assign memory_read = instruction_need ? instruction_memory_read : data_memory_read;

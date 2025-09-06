@@ -59,7 +59,7 @@ assign stage_f_pc = stage_f_jump ? stage_e_pc_next :
 					stage_f_jam_up ? pc : pc + 4;
 
 // при переходе перезапрашиваем по сохранённому адресу, иначе по следующему
-assign instruction_address = !stage_f_pc_actual ? pc : pc + 4;
+assign instruction_address = stage_d_empty ? pc : pc + 4;
 
 // получаем из шины инструкцию или повторяем предыдущее значение, если инструкция многотактовая
 assign instruction = stage_d_empty ? 0 : stage_f_instruction_repeat ? last_instruction : instruction_data;
