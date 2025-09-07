@@ -154,12 +154,12 @@ begin
 	end
 end
 
-wire [31:0] div = next_quotient;
-wire [31:0] rem = next_remainder;
+wire [31:0] div = quotient;
+wire [31:0] rem = remainder;
 wire div_sign = muldiv_sign;
 //wire rem_sign = rem_sign;
 
-wire div_end = next_msb == 0;
+wire div_end = msb == 0;
 wire is_div_wait = !in_progress ? need_wait : !div_end;
 wire is_div_null = !need_wait;
 
